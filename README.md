@@ -9,6 +9,9 @@ The approved architecture and phased roadmap are documented in [the implementati
 - A Python 3.12 package using the `src` layout
 - A minimal FastAPI application
 - `GET /health` for process liveness
+- Provider-neutral identities, review models, capability descriptions, and segregated ports
+- Administrator-controlled provider and model-profile registries
+- A fake-only review orchestration contract harness
 - Local development and container tooling
 - Automated formatting, linting, type checking, and tests
 
@@ -58,7 +61,7 @@ Copy `.env.example` to `.env` for optional local overrides. The example contains
 
 ## Project status
 
-Only Phase 0 is implemented. GitHub Apps, webhooks, AI providers, provider interfaces, persistence, queues, reviews, Check Run API calls, and production deployment are explicitly out of scope.
+Phase 1 defines provider-neutral contracts but implements no real provider. GitHub Apps, webhooks, AI API calls, persistence, queues, publishing, Check Run API calls, and production deployment remain explicitly out of scope.
 
 ## Contributing and security
 
