@@ -25,6 +25,14 @@ class DiffFile(BaseModel):
     truncated: bool = False
 
 
+class RepositoryEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    path: str
+    entry_type: Literal["blob", "tree", "commit"]
+    sha: str = Field(min_length=1, max_length=128)
+    size: int | None = Field(default=None, ge=0)
+
+
 class ChangeRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
     target: ChangeRequestTarget

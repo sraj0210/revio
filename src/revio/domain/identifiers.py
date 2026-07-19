@@ -32,6 +32,8 @@ class RepositoryRef(BaseModel):
     model_config = ConfigDict(frozen=True)
     installation: InstallationRef
     external_id: Identifier
+    owner: Identifier | None = None
+    name: Identifier | None = None
 
 
 class ChangeRequestTarget(BaseModel):
