@@ -12,6 +12,8 @@ The approved architecture and phased roadmap are documented in [the implementati
 - Provider-neutral identities, review models, capability descriptions, and segregated ports
 - Administrator-controlled provider and model-profile registries
 - A fake-only review orchestration contract harness
+- A read-only GitHub App adapter and sandbox validation CLI
+- A signed, non-durable GitHub webhook endpoint for local/sandbox validation only
 - Local development and container tooling
 - Automated formatting, linting, type checking, and tests
 
@@ -61,7 +63,7 @@ Copy `.env.example` to `.env` for optional local overrides. The example contains
 
 ## Project status
 
-Phase 1 defines provider-neutral contracts but implements no real provider. GitHub Apps, webhooks, AI API calls, persistence, queues, publishing, Check Run API calls, and production deployment remain explicitly out of scope.
+Phase 2 provides read-only GitHub App authentication, SCM reads, and sandbox webhook normalization. The webhook is non-durable: a `202` response does not mean the event was stored. Enabling it in production is prohibited until Phase 3 adds atomic delivery and queue-job persistence. AI calls, persistence, queues, publishing, review comments, statuses, and Check Runs remain out of scope.
 
 ## Contributing and security
 
