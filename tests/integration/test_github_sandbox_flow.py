@@ -6,11 +6,12 @@ import pytest
 from pydantic import SecretStr
 
 from revio.adapters.scm.github.auth import InstallationToken, InstallationTokenCache
-from revio.application.webhook.service import GitHubSandboxWebhookService
+from revio.adapters.scm.github.webhook.ingress import GitHubSandboxWebhookIngress
 
 
 @pytest.mark.asyncio
-async def test_suspend_event_evicts_process_local_token() -> None:
+@pytest.mark.parametrize("action", ["suspend", "deleted"])
+async def test_suspend_and_delete_events_evict_process_local_token(action: str) -> None:
     cache = InstallationTokenCache(timedelta(seconds=60), timedelta(seconds=30))
     calls = 0
 
@@ -22,8 +23,8 @@ async def test_suspend_event_evicts_process_local_token() -> None:
         )
 
     await cache.get(9, refresh)
-    result = await GitHubSandboxWebhookService(cache).process(
-        "installation", "delivery", {"action": "suspend", "installation": {"id": 9}}
+    result = await GitHubSandboxWebhookIngress(cache).process(
+        "installation", "delivery", {"action": action, "installation": {"id": 9}}
     )
     await cache.get(9, refresh)
     assert result.disposition == "accepted"

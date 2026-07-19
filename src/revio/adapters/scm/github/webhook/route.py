@@ -1,4 +1,4 @@
-"""Non-durable local/sandbox GitHub webhook route."""
+"""Non-durable local/sandbox GitHub webhook ingress route."""
 
 import json
 import re
@@ -9,8 +9,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from revio.adapters.scm.github.errors import GitHubResponseError
+from revio.adapters.scm.github.webhook.ingress import GitHubSandboxWebhookIngress
 from revio.adapters.scm.github.webhook.signature import verify_signature
-from revio.application.webhook.service import GitHubSandboxWebhookService
 from revio.config.github import GitHubSettings
 
 router = APIRouter()
@@ -64,11 +64,11 @@ async def github_webhook(request: Request) -> JSONResponse:
         if not isinstance(decoded, dict):
             raise ValueError
         payload = cast(dict[str, Any], decoded)
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
-        raise HTTPException(status_code=400, detail="invalid payload") from error
-    service: GitHubSandboxWebhookService = request.app.state.github_webhook_service
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="invalid payload") from None
+    ingress: GitHubSandboxWebhookIngress = request.app.state.github_webhook_ingress
     try:
-        result = await service.process(event_name, delivery, payload)
-    except GitHubResponseError as error:
-        raise HTTPException(status_code=400, detail="invalid payload") from error
+        result = await ingress.process(event_name, delivery, payload)
+    except GitHubResponseError:
+        raise HTTPException(status_code=400, detail="invalid payload") from None
     return JSONResponse(status_code=202, content={"status": result.disposition})

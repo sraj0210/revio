@@ -54,3 +54,25 @@ def test_webhook_secret_is_conditional_and_production_is_blocked(rsa_private_key
         github_webhook_secret=SecretStr("secret"),
         environment="sandbox",
     ).github_sandbox_webhook_enabled
+
+
+def test_api_origin_is_fixed_and_secrets_are_redacted(rsa_private_key_pem: str) -> None:
+    sentinel = "SENTINEL-WEBHOOK-SECRET"
+    with pytest.raises(ValidationError):
+        GitHubSettings(github_api_url="https://example.invalid")
+    settings = GitHubSettings(
+        github_enabled=True,
+        github_app_id=1,
+        github_private_key=SecretStr(rsa_private_key_pem),
+        github_sandbox_webhook_enabled=True,
+        github_webhook_secret=SecretStr(sentinel),
+    )
+    assert sentinel not in repr(settings)
+    with pytest.raises(ValidationError) as caught:
+        GitHubSettings(
+            github_enabled=True,
+            github_app_id=1,
+            github_private_key=SecretStr(sentinel),
+            github_private_key_file=Path("/also-set.pem"),
+        )
+    assert sentinel not in str(caught.value)

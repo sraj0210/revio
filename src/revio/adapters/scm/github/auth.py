@@ -32,17 +32,18 @@ def load_private_key(settings: GitHubSettings) -> RSAPrivateKey:
         if not path.is_absolute():
             raise GitHubConfigurationError("GitHub private-key path must be absolute")
         try:
-            if path.stat().st_size > 64 * 1024:
+            with path.open("rb") as key_file:
+                raw = key_file.read(64 * 1024 + 1)
+            if len(raw) > 64 * 1024:
                 raise GitHubConfigurationError("GitHub private-key file is too large")
-            raw = path.read_bytes()
-        except OSError as error:
-            raise GitHubConfigurationError("unable to read GitHub private key") from error
+        except OSError:
+            raise GitHubConfigurationError("unable to read GitHub private key") from None
     else:
         raise GitHubConfigurationError("GitHub private key is not configured")
     try:
         key = serialization.load_pem_private_key(raw, password=None)
-    except (TypeError, ValueError) as error:
-        raise GitHubConfigurationError("invalid GitHub private key") from error
+    except (TypeError, ValueError):
+        raise GitHubConfigurationError("invalid GitHub private key") from None
     if not isinstance(key, RSAPrivateKey):
         raise GitHubConfigurationError("GitHub private key must be RSA")
     return key

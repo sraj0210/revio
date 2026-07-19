@@ -124,6 +124,86 @@ async def test_malformed_json_and_sha1_only_are_rejected(rsa_private_key_pem: st
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("signature", ["sha256=abc", "sha256=" + "0" * 63, "SHA256=" + "0" * 64])
+async def test_malformed_sha256_signatures_are_rejected(
+    rsa_private_key_pem: str, signature: str
+) -> None:
+    body = json.dumps(pull_payload()).encode()
+    request_headers = headers(body)
+    request_headers["x-hub-signature-256"] = signature
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app(settings(rsa_private_key_pem))),
+        base_url="http://test",
+    ) as client:
+        assert (
+            await client.post("/webhooks/github", content=body, headers=request_headers)
+        ).status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("header", "value"),
+    [
+        ("x-github-event", "bad event"),
+        ("x-github-event", "x" * 129),
+        ("x-github-delivery", "bad\nvalue"),
+    ],
+)
+async def test_event_and_delivery_headers_are_bounded_and_validated(
+    rsa_private_key_pem: str, header: str, value: str
+) -> None:
+    body = json.dumps(pull_payload()).encode()
+    request_headers = headers(body)
+    request_headers[header] = value
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app(settings(rsa_private_key_pem))),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/webhooks/github", content=body, headers=request_headers)
+    assert response.status_code == 400
+    assert "base" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_malformed_required_payload_is_safely_rejected(rsa_private_key_pem: str) -> None:
+    body = json.dumps({"action": "opened", "installation": {"id": 9}}).encode()
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app(settings(rsa_private_key_pem))),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/webhooks/github", content=body, headers=headers(body))
+    assert response.status_code == 400
+    assert response.json() == {"detail": "invalid payload"}
+
+
+@pytest.mark.asyncio
+async def test_signature_is_bound_to_exact_raw_bytes(rsa_private_key_pem: str) -> None:
+    signed = b'{"action":"closed"}'
+    altered = b'{ "action": "closed" }'
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app(settings(rsa_private_key_pem))),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/webhooks/github", content=altered, headers=headers(signed))
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_malformed_payload_secret_is_absent_from_api_response(
+    rsa_private_key_pem: str,
+) -> None:
+    sentinel = "SENTINEL-WEBHOOK-PAYLOAD-SECRET"
+    body = json.dumps({"action": "opened", "secret": sentinel}).encode()
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app(settings(rsa_private_key_pem))),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/webhooks/github", content=body, headers=headers(body))
+    assert response.status_code == 400
+    assert sentinel not in response.text
+
+
+@pytest.mark.asyncio
 async def test_unsupported_action_returns_generic_ignored(rsa_private_key_pem: str) -> None:
     body = json.dumps(pull_payload("closed")).encode()
     async with AsyncClient(

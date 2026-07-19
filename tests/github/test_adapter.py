@@ -1,4 +1,4 @@
-"""Read-only GitHub adapter mapping tests."""
+"""Read-only GitHub adapter mapping and boundary tests."""
 
 import base64
 from typing import Any, cast
@@ -8,12 +8,18 @@ import pytest
 
 from revio.adapters.scm.github.adapter import GitHubReadAdapter
 from revio.adapters.scm.github.client import GitHubClient
-from revio.adapters.scm.github.errors import GitHubUnsupportedObjectError
+from revio.adapters.scm.github.errors import (
+    GitHubAmbiguousNotFoundError,
+    GitHubInvalidRefError,
+    GitHubNotFoundError,
+    GitHubResponseError,
+    GitHubUnsupportedObjectError,
+)
 from revio.domain.identifiers import ChangeRequestTarget, InstallationRef, ProviderId, RepositoryRef
 
 
 class FakeClient:
-    def __init__(self, responses: list[httpx.Response]) -> None:
+    def __init__(self, responses: list[httpx.Response | Exception]) -> None:
         self.responses = responses
         self.calls: list[tuple[str, dict[str, Any] | None]] = []
 
@@ -22,7 +28,15 @@ class FakeClient:
     ) -> httpx.Response:
         assert installation_id == 9
         self.calls.append((path, params))
-        return self.responses.pop(0)
+        result = self.responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def pagination_url(self, value: str) -> str:
+        if not value.startswith("https://api.github.com/"):
+            raise GitHubResponseError("foreign GitHub pagination origin")
+        return value.removeprefix("https://api.github.com")
 
 
 @pytest.fixture
@@ -34,27 +48,42 @@ def github_target() -> ChangeRequestTarget:
     return ChangeRequestTarget(repository=repository, external_number=3)
 
 
+def pr_response(*, changed_files: int = 1) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "number": 3,
+            "title": "PR",
+            "body": None,
+            "state": "open",
+            "draft": False,
+            "merged": False,
+            "changed_files": changed_files,
+            "base": {"sha": "base", "ref": "main"},
+            "head": {"sha": "head", "ref": "feature"},
+        },
+    )
+
+
+def commit_response() -> httpx.Response:
+    return httpx.Response(200, json={"commit": {"tree": {"sha": "tree-sha"}}})
+
+
 @pytest.mark.asyncio
-async def test_current_pr_and_diff_mapping(github_target: ChangeRequestTarget) -> None:
+async def test_current_pr_and_diff_line_mapping(github_target: ChangeRequestTarget) -> None:
     fake = FakeClient(
         [
-            httpx.Response(
-                200,
-                json={
-                    "number": 3,
-                    "title": "PR",
-                    "body": None,
-                    "state": "open",
-                    "draft": False,
-                    "merged": False,
-                    "base": {"sha": "base", "ref": "main"},
-                    "head": {"sha": "head", "ref": "feature"},
-                },
-            ),
+            pr_response(),
+            pr_response(),
             httpx.Response(
                 200,
                 json=[
-                    {"filename": "a.py", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+new"}
+                    {
+                        "filename": "a.py",
+                        "status": "modified",
+                        "changes": 3,
+                        "patch": "@@ -1,2 +1,2 @@\n context\n-old\n+new",
+                    }
                 ],
             ),
         ]
@@ -63,13 +92,110 @@ async def test_current_pr_and_diff_mapping(github_target: ChangeRequestTarget) -
     change = await adapter.get_change_request(github_target)
     diff = await adapter.get_diff(github_target)
     assert (change.base_sha, change.head_sha) == ("base", "head")
-    assert [line.side for line in diff[0].lines] == ["old", "new"]
+    assert diff.completeness.status == "complete"
+    assert [(line.side, line.old_line, line.new_line) for line in diff.items[0].lines] == [
+        ("context", 1, 1),
+        ("old", 2, None),
+        ("new", None, 2),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "status", "old_path", "new_path", "patch_state"),
+    [
+        ({"filename": "a", "status": "added"}, "added", None, "a", "missing"),
+        ({"filename": "a", "status": "removed"}, "deleted", "a", None, "missing"),
+        ({"filename": "a", "status": "modified"}, "modified", "a", "a", "missing"),
+        (
+            {"filename": "b", "previous_filename": "a", "status": "renamed"},
+            "renamed",
+            "a",
+            "b",
+            "missing",
+        ),
+        (
+            {"filename": "b", "previous_filename": "a", "status": "copied"},
+            "copied",
+            "a",
+            "b",
+            "missing",
+        ),
+        (
+            {"filename": "image", "status": "modified", "changes": 0},
+            "modified",
+            "image",
+            "image",
+            "binary_or_no_textual_patch",
+        ),
+        (
+            {"filename": "large", "status": "modified", "changes": 20},
+            "modified",
+            "large",
+            "large",
+            "provider_truncated",
+        ),
+    ],
+)
+def test_diff_status_path_and_patch_semantics(
+    payload: dict[str, object],
+    status: str,
+    old_path: str | None,
+    new_path: str | None,
+    patch_state: str,
+) -> None:
+    from revio.adapters.scm.github.dto.api import GitHubFileDTO
+
+    mapped = GitHubReadAdapter._map_file(  # pyright: ignore[reportPrivateUsage]
+        GitHubFileDTO.model_validate(payload)
+    )
+    assert (mapped.status, mapped.old_path, mapped.new_path, mapped.patch_state) == (
+        status,
+        old_path,
+        new_path,
+        patch_state,
+    )
+
+
+def test_malformed_patch_is_explicit() -> None:
+    from revio.adapters.scm.github.dto.api import GitHubFileDTO
+
+    mapped = GitHubReadAdapter._map_file(  # pyright: ignore[reportPrivateUsage]
+        GitHubFileDTO(filename="a", status="modified", patch="not-a-hunk")
+    )
+    assert mapped.patch_state == "malformed"
+    assert mapped.lines == ()
 
 
 @pytest.mark.asyncio
-async def test_file_explicit_ref_and_unsupported_object(github_target: ChangeRequestTarget) -> None:
+async def test_diff_provider_and_service_completeness(github_target: ChangeRequestTarget) -> None:
+    provider = FakeClient([pr_response(changed_files=2), httpx.Response(200, json=[])])
+    result = await GitHubReadAdapter(cast(GitHubClient, provider)).get_diff(github_target)
+    assert result.completeness.status == "provider_truncated"
+
+    files = [{"filename": f"f{i}", "status": "added"} for i in range(3)]
+    limited = FakeClient([pr_response(changed_files=3), httpx.Response(200, json=files)])
+    result = await GitHubReadAdapter(cast(GitHubClient, limited), max_items=2).get_diff(
+        github_target
+    )
+    assert len(result.items) == 2
+    assert result.completeness.status == "service_item_limit"
+
+    next_link = '<https://api.github.com/next>; rel="next"'
+    pages = FakeClient(
+        [pr_response(changed_files=2), httpx.Response(200, json=[], headers={"Link": next_link})]
+    )
+    result = await GitHubReadAdapter(cast(GitHubClient, pages), max_pages=1).get_diff(github_target)
+    assert result.completeness.status == "service_page_limit"
+
+
+@pytest.mark.asyncio
+async def test_file_requires_verified_repository_ref_and_strict_content(
+    github_target: ChangeRequestTarget,
+) -> None:
     fake = FakeClient(
         [
+            httpx.Response(200),
+            commit_response(),
             httpx.Response(
                 200,
                 json={
@@ -80,80 +206,139 @@ async def test_file_explicit_ref_and_unsupported_object(github_target: ChangeReq
                     "sha": "sha",
                 },
             ),
-            httpx.Response(200, json={"type": "dir", "sha": "sha"}),
         ]
     )
     adapter = GitHubReadAdapter(cast(GitHubClient, fake))
-    assert await adapter.get_file(github_target, "dir/a.py", "head") == "hello"
-    assert fake.calls[0][1] == {"ref": "head"}
-    with pytest.raises(GitHubUnsupportedObjectError):
-        await adapter.get_file(github_target, "dir", "head")
+    assert await adapter.get_file(github_target, "dir/a.py", "feature/head") == "hello"
+    assert fake.calls[-1][1] == {"ref": "feature/head"}
 
 
 @pytest.mark.asyncio
-async def test_tree_resolves_ref_and_is_non_recursive(github_target: ChangeRequestTarget) -> None:
+async def test_file_not_found_only_after_repository_and_ref_are_verified(
+    github_target: ChangeRequestTarget,
+) -> None:
+    missing = FakeClient([httpx.Response(200), commit_response(), GitHubNotFoundError()])
+    assert (
+        await GitHubReadAdapter(cast(GitHubClient, missing)).get_file(
+            github_target, "absent", "head"
+        )
+        is None
+    )
+    bad_ref = FakeClient([httpx.Response(200), GitHubNotFoundError()])
+    with pytest.raises(GitHubInvalidRefError):
+        await GitHubReadAdapter(cast(GitHubClient, bad_ref)).get_file(
+            github_target, "absent", "missing"
+        )
+    bad_repo = FakeClient([GitHubNotFoundError()])
+    with pytest.raises(GitHubAmbiguousNotFoundError):
+        await GitHubReadAdapter(cast(GitHubClient, bad_repo)).get_file(
+            github_target, "absent", "head"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["%%%", base64.b64encode(b"toolarge").decode()])
+async def test_file_strict_base64_and_size_limits(
+    github_target: ChangeRequestTarget, content: str
+) -> None:
     fake = FakeClient(
         [
-            httpx.Response(200, json={"commit": {"tree": {"sha": "tree-sha"}}}),
+            httpx.Response(200),
+            commit_response(),
             httpx.Response(
                 200,
-                json={
-                    "sha": "tree-sha",
-                    "truncated": False,
-                    "tree": [
-                        {
-                            "path": "src",
-                            "mode": "040000",
-                            "type": "tree",
-                            "sha": "src-tree",
-                        }
-                    ],
-                },
-            ),
-            httpx.Response(
-                200,
-                json={
-                    "sha": "src-tree",
-                    "truncated": False,
-                    "tree": [
-                        {
-                            "path": "a.py",
-                            "mode": "100644",
-                            "type": "blob",
-                            "sha": "blob",
-                            "size": 3,
-                        }
-                    ],
-                },
+                json={"type": "file", "content": content, "encoding": "base64", "sha": "sha"},
             ),
         ]
     )
-    entries = await GitHubReadAdapter(cast(GitHubClient, fake)).get_tree(
-        github_target, "src", "head"
+    with pytest.raises(GitHubResponseError):
+        await GitHubReadAdapter(cast(GitHubClient, fake), max_file_bytes=3).get_file(
+            github_target, "a", "head"
+        )
+
+
+@pytest.mark.asyncio
+async def test_unsupported_file_object_is_typed(github_target: ChangeRequestTarget) -> None:
+    fake = FakeClient(
+        [
+            httpx.Response(200),
+            commit_response(),
+            httpx.Response(200, json={"type": "dir", "sha": "x"}),
+        ]
     )
-    assert entries[0].path == "src/a.py"
+    with pytest.raises(GitHubUnsupportedObjectError):
+        await GitHubReadAdapter(cast(GitHubClient, fake)).get_file(github_target, "dir", "head")
+
+
+@pytest.mark.asyncio
+async def test_tree_resolves_ref_and_reports_truncation(github_target: ChangeRequestTarget) -> None:
+    tree = {
+        "sha": "tree-sha",
+        "truncated": True,
+        "tree": [{"path": "a", "mode": "100644", "type": "blob", "sha": "blob"}],
+    }
+    fake = FakeClient([httpx.Response(200), commit_response(), httpx.Response(200, json=tree)])
+    result = await GitHubReadAdapter(cast(GitHubClient, fake)).get_tree(github_target, "", "head")
+    assert result.completeness.status == "provider_truncated"
+    assert result.items[0].path == "a"
     assert fake.calls == [
+        ("/repos/owner/repo", None),
         ("/repos/owner/repo/commits/head", None),
         ("/repos/owner/repo/git/trees/tree-sha", None),
-        ("/repos/owner/repo/git/trees/src-tree", None),
     ]
 
 
 @pytest.mark.asyncio
-async def test_changed_files_paginates(github_target: ChangeRequestTarget) -> None:
-    first = [{"filename": f"file-{index}.py", "status": "added"} for index in range(100)]
-    fake = FakeClient([httpx.Response(200, json=first), httpx.Response(200, json=[])])
-    files = await GitHubReadAdapter(cast(GitHubClient, fake)).get_diff(github_target)
-    assert len(files) == 100
-    assert fake.calls[-1][1] == {"per_page": 100, "page": 2}
+async def test_tree_service_item_and_request_limits(github_target: ChangeRequestTarget) -> None:
+    tree = {
+        "sha": "tree-sha",
+        "tree": [
+            {"path": "a", "mode": "100644", "type": "blob", "sha": "a"},
+            {"path": "b", "mode": "100644", "type": "blob", "sha": "b"},
+        ],
+    }
+    fake = FakeClient([httpx.Response(200), commit_response(), httpx.Response(200, json=tree)])
+    result = await GitHubReadAdapter(cast(GitHubClient, fake), max_items=1).get_tree(
+        github_target, "", "head"
+    )
+    assert result.completeness.status == "service_item_limit"
+
+    depth = FakeClient([httpx.Response(200), commit_response()])
+    result = await GitHubReadAdapter(cast(GitHubClient, depth), max_pages=0).get_tree(
+        github_target, "src", "head"
+    )
+    assert result.completeness.status == "service_page_limit"
 
 
 @pytest.mark.asyncio
-async def test_repository_path_traversal_is_rejected(
-    github_target: ChangeRequestTarget,
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/absolute",
+        "../secret",
+        "a/./b",
+        "a\\b",
+        "%2e%2e/secret",
+        "%252e%252e/secret",
+        "a\x00b",
+    ],
+)
+async def test_repository_path_attacks_are_rejected(
+    github_target: ChangeRequestTarget, path: str
 ) -> None:
-    from revio.adapters.scm.github.errors import GitHubResponseError
-
     adapter = GitHubReadAdapter(cast(GitHubClient, FakeClient([])))
     with pytest.raises(GitHubResponseError):
-        await adapter.get_file(github_target, "../secret", "head")
+        await adapter.get_file(github_target, path, "head")
+
+
+@pytest.mark.asyncio
+async def test_empty_ref_and_invalid_coordinates_are_rejected(
+    github_target: ChangeRequestTarget,
+) -> None:
+    adapter = GitHubReadAdapter(cast(GitHubClient, FakeClient([])))
+    with pytest.raises(GitHubResponseError):
+        await adapter.get_file(github_target, "a", "")
+    bad_repository = github_target.repository.model_copy(update={"owner": "bad/owner"})
+    bad_target = github_target.model_copy(update={"repository": bad_repository})
+    with pytest.raises(GitHubResponseError):
+        await adapter.get_change_request(bad_target)

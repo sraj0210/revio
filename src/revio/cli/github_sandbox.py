@@ -3,23 +3,33 @@
 import argparse
 import asyncio
 import json
-from datetime import timedelta
-
-import httpx
+import sys
 
 from revio.adapters.scm.github import GITHUB_PROVIDER_ID
-from revio.adapters.scm.github.adapter import GitHubReadAdapter
-from revio.adapters.scm.github.auth import GitHubAppJWT, InstallationTokenCache, load_private_key
-from revio.adapters.scm.github.client import GitHubClient
+from revio.adapters.scm.github.composition import compose_github
+from revio.adapters.scm.github.validation import (
+    validate_coordinate,
+    validate_positive_identifier,
+    validate_ref,
+    validate_repository_path,
+)
 from revio.config.github import GitHubSettings
 from revio.domain.identifiers import ChangeRequestTarget, InstallationRef, RepositoryRef
+from revio.errors import RevioError
+
+
+def _positive(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate read-only GitHub sandbox access")
-    parser.add_argument("--installation-id", type=int, required=True)
+    parser.add_argument("--installation-id", type=_positive, required=True)
     parser.add_argument("--repository", required=True, help="OWNER/NAME")
-    parser.add_argument("--pull-request", type=int, required=True)
+    parser.add_argument("--pull-request", type=_positive, required=True)
     parser.add_argument("--path", help="Optional file path; contents are never printed")
     parser.add_argument("--ref", help="Explicit ref for file/tree validation")
     parser.add_argument("--tree-path", default="")
@@ -28,12 +38,22 @@ def _parser() -> argparse.ArgumentParser:
 
 async def run_validation(args: argparse.Namespace, settings: GitHubSettings) -> int:
     if settings.environment not in {"local", "sandbox"}:
-        raise SystemExit("sandbox validation CLI requires local or sandbox environment")
-    if not settings.github_enabled or settings.github_app_id is None:
-        raise SystemExit("GitHub adapter is not enabled")
+        raise ValueError("sandbox validation CLI requires local or sandbox environment")
+    if not settings.github_enabled:
+        raise ValueError("GitHub adapter is not enabled")
     owner, separator, name = args.repository.partition("/")
-    if not separator or not owner or not name or "/" in name:
-        raise SystemExit("repository must be OWNER/NAME")
+    if not separator or "/" in name:
+        raise ValueError("repository must be OWNER/NAME")
+    owner = validate_coordinate(owner, "owner")
+    name = validate_coordinate(name, "name")
+    validate_positive_identifier(args.installation_id, "installation identity")
+    validate_positive_identifier(args.pull_request, "pull request number")
+    if args.path is not None:
+        validate_repository_path(args.path)
+    validate_repository_path(args.tree_path, allow_empty=True)
+    if args.ref is not None:
+        validate_ref(args.ref)
+
     installation = InstallationRef(
         provider_id=GITHUB_PROVIDER_ID, external_id=str(args.installation_id)
     )
@@ -41,27 +61,9 @@ async def run_validation(args: argparse.Namespace, settings: GitHubSettings) -> 
         installation=installation, external_id=f"sandbox:{owner}/{name}", owner=owner, name=name
     )
     target = ChangeRequestTarget(repository=repository, external_number=args.pull_request)
-    cache = InstallationTokenCache(
-        timedelta(seconds=settings.github_token_refresh_margin_seconds),
-        timedelta(seconds=settings.github_token_minimum_usable_lifetime_seconds),
-    )
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": settings.github_api_version,
-        "User-Agent": "revio-phase2-sandbox",
-    }
-    async with httpx.AsyncClient(
-        base_url=settings.github_api_url,
-        headers=headers,
-        timeout=settings.github_http_timeout_seconds,
-        follow_redirects=False,
-    ) as http:
-        client = GitHubClient(
-            http, GitHubAppJWT(settings.github_app_id, load_private_key(settings)), cache
-        )
-        adapter = GitHubReadAdapter(
-            client, max_pages=settings.github_max_pages, max_items=settings.github_max_items
-        )
+    composition = compose_github(settings)
+    try:
+        adapter = composition.adapter
         change = await adapter.get_change_request(target)
         files = await adapter.get_diff(target)
         explicit_ref = args.ref or change.head_sha
@@ -72,9 +74,14 @@ async def run_validation(args: argparse.Namespace, settings: GitHubSettings) -> 
             "draft": change.draft,
             "base_sha": change.base_sha,
             "head_sha": change.head_sha,
+            "changed_files_completeness": files.completeness.status,
             "changed_files": [
-                {"path": item.new_path, "status": item.status, "truncated": item.truncated}
-                for item in files
+                {
+                    "path": item.new_path or item.old_path,
+                    "status": item.status,
+                    "patch_state": item.patch_state,
+                }
+                for item in files.items
             ],
         }
         if args.path:
@@ -89,13 +96,20 @@ async def run_validation(args: argparse.Namespace, settings: GitHubSettings) -> 
         report["tree"] = {
             "ref": explicit_ref,
             "path": args.tree_path,
-            "entry_count": len(tree),
-            "entries": [{"path": entry.path, "type": entry.entry_type} for entry in tree],
+            "completeness": tree.completeness.status,
+            "entry_count": len(tree.items),
+            "entries": [{"path": entry.path, "type": entry.entry_type} for entry in tree.items],
         }
         print(json.dumps(report, indent=2))
+    finally:
+        await composition.close()
     return 0
 
 
 def main() -> int:
     args = _parser().parse_args()
-    return asyncio.run(run_validation(args, GitHubSettings()))
+    try:
+        return asyncio.run(run_validation(args, GitHubSettings()))
+    except (RevioError, ValueError, OSError):
+        print("Revio GitHub validation failed safely", file=sys.stderr)
+        return 1
