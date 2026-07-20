@@ -147,6 +147,40 @@ async def test_cross_origin_redirect_is_rejected_and_token_never_reaches_foreign
     assert foreign_calls == 0
 
 
+@pytest.mark.asyncio
+async def test_malformed_redirect_is_typed_sanitized_and_not_followed(
+    rsa_private_key_pem: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    sentinel = "SENTINEL-REDIRECT"
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path.endswith("access_tokens"):
+            return token_response()
+        return httpx.Response(302, headers={"Location": f"//{sentinel}@:bad/steal"})
+
+    client, http = client_for(rsa_private_key_pem, httpx.MockTransport(handler))
+    async with http:
+        with pytest.raises(GitHubResponseError) as caught:
+            await client.get(9, "/old")
+    rendered = " ".join(
+        map(
+            str,
+            [caught.value, repr(caught.value), caught.value.__cause__, caught.value.__context__],
+        )
+    )
+    assert sentinel not in rendered
+    assert sentinel not in caplog.text
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert len(seen) == 2
+    assert {request.url.host for request in seen} == {"api.github.com"}
+    reads = [request for request in seen if not request.url.path.endswith("access_tokens")]
+    assert [request.url.path for request in reads] == ["/old"]
+    assert reads[0].headers["Authorization"] == "Bearer opaque"
+
+
 def test_pagination_links_are_origin_confined(rsa_private_key_pem: str) -> None:
     client, http = client_for(
         rsa_private_key_pem, httpx.MockTransport(lambda _: httpx.Response(200))

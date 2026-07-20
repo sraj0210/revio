@@ -99,6 +99,7 @@ class GitHubClient:
             redirects = 0
             while True:
                 failure = None
+                invalid_redirect = False
                 response = None
                 try:
                     response = await self._http.get(
@@ -107,10 +108,14 @@ class GitHubClient:
                         headers={"Authorization": f"Bearer {token.get_secret_value()}"},
                         follow_redirects=False,
                     )
+                except (httpx.InvalidURL, httpx.RemoteProtocolError):
+                    invalid_redirect = True
                 except httpx.TimeoutException:
                     failure = "GitHub read request timed out"
                 except httpx.HTTPError:
                     failure = "GitHub read request failed"
+                if invalid_redirect:
+                    raise GitHubResponseError("invalid GitHub redirect")
                 if failure is not None:
                     raise GitHubTransportError(failure)
                 assert response is not None
@@ -119,7 +124,12 @@ class GitHubClient:
                 location = response.headers.get("Location")
                 if not location or redirects >= self._max_redirects:
                     raise GitHubResponseError("invalid GitHub redirect")
-                target = response.request.url.join(location)
+                try:
+                    target = response.request.url.join(location)
+                except httpx.InvalidURL:
+                    target = None
+                if target is None:
+                    raise GitHubResponseError("invalid GitHub redirect")
                 if _origin(target) != _origin(self._api_url):
                     raise GitHubResponseError("foreign GitHub redirect rejected")
                 current_path = str(target.copy_with(scheme=None, host=None, port=None))

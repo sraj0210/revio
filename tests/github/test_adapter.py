@@ -1,7 +1,7 @@
 """Read-only GitHub adapter mapping and boundary tests."""
 
 import base64
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 import pytest
@@ -199,6 +199,21 @@ def test_valid_patch_is_complete_and_preserves_change_counts() -> None:
     )
     assert mapped.patch_state == "complete"
     assert (mapped.additions, mapped.deletions, mapped.changes) == (1, 1, 2)
+
+
+@pytest.mark.parametrize("status", ["renamed", "copied"])
+def test_renamed_and_copied_identity_includes_previous_filename(
+    status: Literal["renamed", "copied"],
+) -> None:
+    from revio.adapters.scm.github.dto.api import GitHubFileDTO
+
+    first = GitHubFileDTO(filename="new", previous_filename="old-a", status=status)
+    second = GitHubFileDTO(filename="new", previous_filename="old-b", status=status)
+    assert GitHubReadAdapter._file_identity(  # pyright: ignore[reportPrivateUsage]
+        first
+    ) != GitHubReadAdapter._file_identity(  # pyright: ignore[reportPrivateUsage]
+        second
+    )
 
 
 def test_provider_truncated_patch_state_requires_explicit_authoritative_evidence() -> None:
