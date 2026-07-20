@@ -25,6 +25,8 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
     store = SQLiteStore(database, queue)
     github_settings = GitHubSettings()
     github = compose_github(github_settings) if github_settings.github_enabled else None
+    if github is None and not github_settings.github_allow_idle_worker:
+        raise ValueError("worker requires an enabled provider adapter")
     lock = MaintenanceLock(
         database.database_path.with_name("revio.maintenance.lock"), exclusive=False
     )

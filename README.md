@@ -79,7 +79,7 @@ the separate `revio-worker health` command for container health checks.
 
 AI calls, publishing, review comments, statuses, Check Runs, `.revio.yml`, PostgreSQL, Redis, and multiple workers remain out of scope. The only GitHub POST is still installation-token exchange.
 
-When `REVIO_GITHUB_ENABLED=true`, application bootstrap validates the RSA key and registers the GitHub read and repository-content ports. Disabled GitHub configuration constructs no adapter and requires no credentials. The sandbox CLI uses the same adapter-private composition factory. Changed-file and tree output includes explicit completeness values; any value other than `complete` is partial and must not be interpreted as a complete repository view.
+When `REVIO_GITHUB_ENABLED=true`, application bootstrap validates the RSA key and registers the GitHub read and repository-content ports. Operational worker readiness requires this adapter. An intentionally idle local-development worker additionally requires `REVIO_GITHUB_ALLOW_IDLE_WORKER=true`; production and durable modes reject it. The sandbox CLI uses the same adapter-private composition factory. Changed-file and tree output includes explicit completeness values; any value other than `complete` is partial and must not be interpreted as a complete repository view.
 
 ## Contributing and security
 

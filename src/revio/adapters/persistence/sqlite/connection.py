@@ -8,18 +8,21 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import aiosqlite
 
 from revio.adapters.persistence.sqlite.capabilities import require_supported_sqlite
 from revio.config.database import DatabaseSettings
-from revio.errors import PersistenceUnavailableError
+from revio.errors import PersistenceIntegrityError, PersistenceUnavailableError
 from revio.ports.observability import QueueMetricsPort
 
 T = TypeVar("T")
 FailureHook = Callable[[str], None]
 WriteOperation = Callable[[aiosqlite.Connection], Awaitable[T]]
+ReadOperation = Callable[[aiosqlite.Connection], Awaitable[T]]
+CommitReconciler = Callable[[T], Awaitable[T]]
+COMMIT_RECONCILIATION_SECONDS = 1.0
 
 
 def is_busy(error: aiosqlite.OperationalError) -> bool:
@@ -147,15 +150,31 @@ class SQLiteConnectionPolicy:
     async def connect(
         self, *, busy_timeout_ms: int | None = None
     ) -> AsyncGenerator[aiosqlite.Connection, None]:
-        prepare_database_file(self.settings)
+        storage_error: str | None = None
+        try:
+            prepare_database_file(self.settings)
+        except PersistenceUnavailableError as error:
+            storage_error = str(error)
+        except OSError:
+            storage_error = "database storage is unavailable"
+        if storage_error is not None:
+            raise PersistenceUnavailableError(storage_error)
+        connection: aiosqlite.Connection | None = None
         try:
             connection = await aiosqlite.connect(self.path, timeout=0)
         except (aiosqlite.Error, OSError):
-            raise PersistenceUnavailableError("database connection is unavailable") from None
+            pass
+        if connection is None:
+            raise PersistenceUnavailableError("database connection is unavailable")
         connection.row_factory = aiosqlite.Row
         timeout = (
             self.settings.database_busy_timeout_ms if busy_timeout_ms is None else busy_timeout_ms
         )
+        policy_failed = False
+        cleanup_failed = False
+        journal: list[aiosqlite.Row] = []
+        synchronous: list[aiosqlite.Row] = []
+        foreign_keys: list[aiosqlite.Row] = []
         try:
             try:
                 await connection.execute("PRAGMA foreign_keys=ON")
@@ -165,9 +184,9 @@ class SQLiteConnectionPolicy:
                 synchronous = list(await connection.execute_fetchall("PRAGMA synchronous"))
                 foreign_keys = list(await connection.execute_fetchall("PRAGMA foreign_keys"))
             except aiosqlite.Error:
-                raise PersistenceUnavailableError(
-                    "database connection policy is unavailable"
-                ) from None
+                policy_failed = True
+            if policy_failed:
+                raise PersistenceUnavailableError("database connection policy is unavailable")
             if (
                 not journal
                 or str(journal[0][0]).lower() != "wal"
@@ -186,9 +205,9 @@ class SQLiteConnectionPolicy:
             except asyncio.CancelledError:
                 raise
             except aiosqlite.Error:
-                raise PersistenceUnavailableError(
-                    "database connection cleanup failed safely"
-                ) from None
+                cleanup_failed = True
+        if cleanup_failed:
+            raise PersistenceUnavailableError("database connection cleanup failed safely")
 
     async def _settle(self, operation: Callable[[], Coroutine[Any, Any, None]]) -> None:
         task = asyncio.create_task(operation())
@@ -207,7 +226,39 @@ class SQLiteConnectionPolicy:
                 continue
         await task
 
-    async def write(self, operation: WriteOperation[T], *, commit: bool = True) -> T:
+    async def read(self, operation: ReadOperation[T]) -> T:
+        """Run a verified read while containing SQLite failures at the adapter boundary."""
+        failed = False
+        result: T | None = None
+        async with self.connect() as connection:
+            try:
+                result = await operation(connection)
+            except asyncio.CancelledError:
+                raise
+            except aiosqlite.Error:
+                failed = True
+        if failed:
+            raise PersistenceUnavailableError("database read failed safely")
+        return cast(T, result)
+
+    async def _reconcile_commit(self, reconciler: CommitReconciler[T], result: T) -> T:
+        timed_out = False
+        try:
+            async with asyncio.timeout(COMMIT_RECONCILIATION_SECONDS):
+                return await reconciler(result)
+        except TimeoutError:
+            timed_out = True
+        if timed_out:
+            raise PersistenceUnavailableError("database commit outcome could not be confirmed")
+        raise AssertionError("unreachable commit reconciliation state")
+
+    async def write(
+        self,
+        operation: WriteOperation[T],
+        *,
+        commit: bool = True,
+        reconcile: CommitReconciler[T] | None = None,
+    ) -> T:
         """Retry bounded BEGIN IMMEDIATE acquisition; never time out an active commit."""
         started = time.monotonic()
         maximum = self.settings.database_busy_max_elapsed_seconds
@@ -222,6 +273,9 @@ class SQLiteConnectionPolicy:
                     int(remaining * 1_000),
                 ),
             )
+            begin_failed = False
+            commit_failed = False
+            result: T | None = None
             async with self.connect(busy_timeout_ms=effective_ms) as connection:
                 try:
                     self.fail("before_begin")
@@ -231,20 +285,22 @@ class SQLiteConnectionPolicy:
                     raise
                 except aiosqlite.OperationalError as error:
                     if not is_busy(error):
-                        raise PersistenceUnavailableError(
-                            "database operation failed safely"
-                        ) from None
-                    if attempt >= self.settings.database_busy_max_attempts:
-                        break
-                    remaining = maximum - (time.monotonic() - started)
-                    if remaining <= 0:
-                        break
-                    delay = min(0.05 * attempt, remaining)
-                    if delay >= remaining:
-                        break
-                    await asyncio.sleep(delay)
-                    continue
+                        begin_failed = True
+                    else:
+                        if attempt >= self.settings.database_busy_max_attempts:
+                            break
+                        remaining = maximum - (time.monotonic() - started)
+                        if remaining <= 0:
+                            break
+                        delay = min(0.05 * attempt, remaining)
+                        if delay >= remaining:
+                            break
+                        await asyncio.sleep(delay)
+                        continue
+                if begin_failed:
+                    raise PersistenceUnavailableError("database operation failed safely")
 
+                operation_failed = False
                 try:
                     self.fail("after_begin")
                     result = await operation(connection)
@@ -252,26 +308,41 @@ class SQLiteConnectionPolicy:
                 except asyncio.CancelledError:
                     await self._rollback_after_cancellation(connection)
                     raise
-                except BaseException as error:
+                except aiosqlite.Error:
+                    try:
+                        await self._settle(connection.rollback)
+                    except aiosqlite.Error:
+                        pass
+                    operation_failed = True
+                except BaseException:
                     await self._settle(connection.rollback)
-                    if isinstance(error, aiosqlite.Error):
-                        raise PersistenceUnavailableError(
-                            "database operation failed safely"
-                        ) from None
                     raise
+                if operation_failed:
+                    raise PersistenceUnavailableError("database operation failed safely")
 
                 try:
                     await self._settle(connection.commit if commit else connection.rollback)
                 except asyncio.CancelledError:
                     raise
-                except BaseException as error:
-                    await self._settle(connection.rollback)
-                    if isinstance(error, aiosqlite.Error):
-                        raise PersistenceUnavailableError(
-                            "database operation failed safely"
-                        ) from None
-                    raise
-                return result
+                except aiosqlite.Error:
+                    commit_failed = True
+                    if connection.in_transaction:
+                        try:
+                            await self._settle(connection.rollback)
+                        except aiosqlite.Error:
+                            pass
+            resolved_result = cast(T, result)
+            if commit_failed:
+                if not commit:
+                    raise PersistenceUnavailableError(
+                        "database rollback outcome could not be confirmed"
+                    )
+                if reconcile is None:
+                    raise PersistenceIntegrityError(
+                        "database commit outcome could not be reconciled"
+                    )
+                return await self._reconcile_commit(reconcile, resolved_result)
+            return resolved_result
 
         self.metric("database_busy_exhausted")
         raise PersistenceUnavailableError("database is temporarily unavailable") from None

@@ -55,13 +55,15 @@ class SQLiteInstallationRepository:
         self._connections.fail("after_lifecycle_upsert")
 
     async def get(self, provider_id: str, installation_id: str) -> InstallationState | None:
-        async with self._connections.connect() as connection:
-            rows = list(
+        async def read(connection: aiosqlite.Connection) -> list[aiosqlite.Row]:
+            return list(
                 await connection.execute_fetchall(
                     "SELECT * FROM installation_states WHERE provider_id=? AND installation_id=?",
                     (provider_id, installation_id),
                 )
             )
+
+        rows = await self._connections.read(read)
         if not rows:
             return None
         row = rows[0]

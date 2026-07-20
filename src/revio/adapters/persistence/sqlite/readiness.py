@@ -65,7 +65,9 @@ class SQLiteReadinessRepository:
             return False
 
     async def status(self) -> dict[str, int | float]:
-        async with self._connections.connect() as connection:
+        async def read(
+            connection: aiosqlite.Connection,
+        ) -> tuple[list[aiosqlite.Row], int, int, str | None]:
             rows = list(
                 await connection.execute_fetchall(
                     "SELECT state, COUNT(*) AS total FROM queue_jobs GROUP BY state"
@@ -92,18 +94,21 @@ class SQLiteReadinessRepository:
                     )
                 )
             )["oldest"]
+            return rows, cast(int, deliveries), cast(int, tombstones), oldest
+
+        rows, deliveries, tombstones, oldest = await self._connections.read(read)
         result: dict[str, int | float] = {
             cast(str, row["state"]): cast(int, row["total"]) for row in rows
         }
-        result["deliveries"] = cast(int, deliveries)
-        result["tombstones"] = cast(int, tombstones)
+        result["deliveries"] = deliveries
+        result["tombstones"] = tombstones
         result["active_jobs"] = sum(
             int(result.get(state, 0)) for state in ("pending", "running", "retry_wait")
         )
         result["terminal_jobs"] = sum(
             int(result.get(state, 0)) for state in ("completed", "dead", "cancelled", "superseded")
         )
-        oldest_at = datetime_value(cast(str | None, oldest))
+        oldest_at = datetime_value(oldest)
         result["oldest_pending_age_seconds"] = (
             max(0.0, (datetime.now(UTC) - oldest_at).total_seconds())
             if oldest_at is not None
@@ -130,4 +135,12 @@ class SQLiteReadinessRepository:
 
     @staticmethod
     def _size(path: Path) -> int:
-        return path.stat().st_size if path.exists() else 0
+        failed = False
+        size = 0
+        try:
+            size = path.stat().st_size if path.exists() else 0
+        except OSError:
+            failed = True
+        if failed:
+            raise PersistenceUnavailableError("database status is unavailable")
+        return size

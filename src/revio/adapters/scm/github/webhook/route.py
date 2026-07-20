@@ -18,7 +18,12 @@ from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
 from revio.adapters.scm.github.webhook.signature import verify_signature
 from revio.config.github import GitHubSettings
 from revio.domain.queue import IngressDisposition
-from revio.errors import InvalidJobError, PersistenceUnavailableError, QueueCapacityError
+from revio.errors import (
+    InvalidJobError,
+    PersistenceIntegrityError,
+    PersistenceUnavailableError,
+    QueueCapacityError,
+)
 from revio.ports.persistence import DurableIngressPort
 
 router = APIRouter()
@@ -119,7 +124,7 @@ async def github_webhook(request: Request) -> JSONResponse:
             content={"detail": "durable ingress unavailable"},
             headers={"Retry-After": "1"},
         )
-    except PersistenceUnavailableError:
+    except (PersistenceUnavailableError, PersistenceIntegrityError):
         logger.warning(
             "github_webhook_persistence_unavailable",
             extra={"correlation_id": correlation_id},

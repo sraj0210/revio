@@ -14,6 +14,7 @@ class GitHubSettings(BaseSettings):
 
     environment: Literal["local", "sandbox", "production"] = "local"
     github_enabled: bool = False
+    github_allow_idle_worker: bool = False
     github_webhook_mode: Literal["disabled", "sandbox", "durable"] = "disabled"
     # Phase 2 compatibility input; normalized into github_webhook_mode.
     github_sandbox_webhook_enabled: bool = False
@@ -37,6 +38,12 @@ class GitHubSettings(BaseSettings):
         key_sources = sum(
             source is not None for source in (self.github_private_key, self.github_private_key_file)
         )
+        if self.github_allow_idle_worker and (
+            self.environment != "local"
+            or self.github_enabled
+            or self.github_webhook_mode != "disabled"
+        ):
+            raise ValueError("idle worker mode is restricted to disabled local development")
         if self.github_enabled:
             if self.github_app_id is None:
                 raise ValueError("GitHub App ID is required when GitHub is enabled")

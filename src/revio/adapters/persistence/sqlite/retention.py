@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import aiosqlite
@@ -9,9 +10,20 @@ import aiosqlite
 from revio.adapters.persistence.sqlite.connection import SQLiteConnectionPolicy
 from revio.adapters.persistence.sqlite.values import timestamp
 from revio.domain.queue import RetentionResult
-from revio.errors import PersistenceUnavailableError, RetentionIntegrityError
+from revio.errors import (
+    PersistenceIntegrityError,
+    PersistenceUnavailableError,
+    RetentionIntegrityError,
+)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _RetentionBatch:
+    result: RetentionResult
+    job_ids: tuple[str, ...]
+    delivery_facts: tuple[tuple[str, str, str], ...]
 
 
 class SQLiteTerminalRetentionRepository:
@@ -34,7 +46,7 @@ class SQLiteTerminalRetentionRepository:
         if not await self._capability_check():
             raise PersistenceUnavailableError("database is not ready for retention") from None
 
-        async def operation(connection: aiosqlite.Connection) -> RetentionResult:
+        async def operation(connection: aiosqlite.Connection) -> _RetentionBatch:
             jobs = list(
                 await connection.execute_fetchall(
                     "SELECT id FROM queue_jobs "
@@ -45,7 +57,11 @@ class SQLiteTerminalRetentionRepository:
             )
             job_ids = [row["id"] for row in jobs]
             if not job_ids:
-                return RetentionResult(jobs=0, attempts=0, deliveries=0)
+                return _RetentionBatch(
+                    result=RetentionResult(jobs=0, attempts=0, deliveries=0),
+                    job_ids=(),
+                    delivery_facts=(),
+                )
             placeholders = ",".join("?" for _ in job_ids)
             attempts = next(
                 iter(
@@ -65,7 +81,14 @@ class SQLiteTerminalRetentionRepository:
             )
             result = RetentionResult(jobs=len(jobs), attempts=attempts, deliveries=len(deliveries))
             if dry_run:
-                return result
+                return _RetentionBatch(
+                    result=result,
+                    job_ids=tuple(job_ids),
+                    delivery_facts=tuple(
+                        (row["provider_id"], row["delivery_identity"], row["payload_sha256"])
+                        for row in deliveries
+                    ),
+                )
 
             retained_at = timestamp(datetime.now(UTC))
             for row in deliveries:
@@ -109,6 +132,71 @@ class SQLiteTerminalRetentionRepository:
             await connection.execute(
                 f"DELETE FROM queue_jobs WHERE id IN ({placeholders})", job_ids
             )
-            return result
+            return _RetentionBatch(
+                result=result,
+                job_ids=tuple(job_ids),
+                delivery_facts=tuple(
+                    (row["provider_id"], row["delivery_identity"], row["payload_sha256"])
+                    for row in deliveries
+                ),
+            )
 
-        return await self._connections.write(operation, commit=not dry_run)
+        async def reconcile(expected: _RetentionBatch) -> _RetentionBatch:
+            async def read(connection: aiosqlite.Connection) -> _RetentionBatch:
+                if not expected.job_ids:
+                    return expected
+                placeholders = ",".join("?" for _ in expected.job_ids)
+                jobs = list(
+                    await connection.execute_fetchall(
+                        f"SELECT id FROM queue_jobs WHERE id IN ({placeholders})",
+                        expected.job_ids,
+                    )
+                )
+                attempts = list(
+                    await connection.execute_fetchall(
+                        f"SELECT 1 FROM job_attempts WHERE job_id IN ({placeholders}) LIMIT 1",
+                        expected.job_ids,
+                    )
+                )
+                live = list(
+                    await connection.execute_fetchall(
+                        f"SELECT 1 FROM webhook_deliveries WHERE linked_job_id IN ({placeholders})",
+                        expected.job_ids,
+                    )
+                )
+                tombstones_confirmed = 0
+                for provider_id, delivery_identity, payload_hash in expected.delivery_facts:
+                    rows = list(
+                        await connection.execute_fetchall(
+                            "SELECT payload_sha256 FROM webhook_delivery_tombstones "
+                            "WHERE provider_id=? AND delivery_identity=?",
+                            (provider_id, delivery_identity),
+                        )
+                    )
+                    if rows and rows[0]["payload_sha256"] == payload_hash:
+                        tombstones_confirmed += 1
+                    elif rows:
+                        raise PersistenceIntegrityError(
+                            "retention commit reconciliation found inconsistent state"
+                        )
+                if (
+                    not jobs
+                    and not attempts
+                    and not live
+                    and tombstones_confirmed == len(expected.delivery_facts)
+                ):
+                    return expected
+                if len(jobs) == len(expected.job_ids) and len(live) == len(expected.delivery_facts):
+                    raise PersistenceUnavailableError("retention commit was not confirmed")
+                raise PersistenceIntegrityError(
+                    "retention commit reconciliation found inconsistent state"
+                )
+
+            return await self._connections.read(read)
+
+        batch = await self._connections.write(
+            operation,
+            commit=not dry_run,
+            reconcile=None if dry_run else reconcile,
+        )
+        return batch.result

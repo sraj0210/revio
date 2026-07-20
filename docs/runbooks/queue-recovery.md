@@ -8,7 +8,9 @@ client cleanup complete before the container runtime may send `SIGKILL`.
 
 `REVIO_QUEUE_MAX_ATTEMPTS` means total committed leases, including the first lease;
 it is not a count of retries after the initial attempt. A disabled GitHub adapter is
-an explicit idle-development configuration: readiness validates persistence and the
-worker holds its instance lock but it does not lease work.
+not operationally ready. Local development may explicitly set
+`REVIO_GITHUB_ALLOW_IDLE_WORKER=true`; readiness then validates persistence and the
+worker holds its instance lock but does not lease work. This setting is rejected
+outside the local, disabled-webhook configuration.
 
 Expired unfinished attempts close as `lease_expired`. Exhausted running work becomes `dead` with `lease_expired_attempts_exhausted`; exhausted pending/retry-wait work becomes `dead` with `attempts_exhausted`. Inspect bounded counts with `revio-queue-status`. Never edit active rows by hand.

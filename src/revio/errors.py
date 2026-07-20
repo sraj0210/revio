@@ -33,6 +33,10 @@ class PersistenceUnavailableError(PersistenceError):
     """Persistence could not complete within its bounded availability budget."""
 
 
+class PersistenceIntegrityError(PersistenceError):
+    """Persistence reached a durable state that cannot be accepted safely."""
+
+
 class MigrationRequiredError(PersistenceError):
     """The database schema is not at the required revision."""
 

@@ -2,9 +2,11 @@
 
 import asyncio
 import json
+import sys
 
 from revio.adapters.persistence.sqlite import SQLiteStore
 from revio.config.database import DatabaseSettings
+from revio.errors import PersistenceError
 
 
 async def _status() -> None:
@@ -13,4 +15,8 @@ async def _status() -> None:
 
 
 def main() -> None:
-    asyncio.run(_status())
+    try:
+        asyncio.run(_status())
+    except PersistenceError:
+        print("queue status is unavailable", file=sys.stderr)
+        raise SystemExit(1) from None
