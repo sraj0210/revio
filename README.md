@@ -1,6 +1,6 @@
 # Revio
 
-Revio is a provider-neutral, AI-powered code-review platform. The project is in its engineering-foundation phase; provider integrations and review behavior are not implemented yet.
+Revio is a provider-neutral, AI-powered code-review platform. Phase 2 includes a read-only GitHub sandbox integration, but it is not production-ready: durable webhook processing, AI review execution, and GitHub write operations remain unimplemented.
 
 The approved architecture and phased roadmap are documented in [the implementation plan](docs/architecture/implementation-plan.md).
 
@@ -12,6 +12,8 @@ The approved architecture and phased roadmap are documented in [the implementati
 - Provider-neutral identities, review models, capability descriptions, and segregated ports
 - Administrator-controlled provider and model-profile registries
 - A fake-only review orchestration contract harness
+- A read-only GitHub App adapter and sandbox validation CLI
+- A signed, non-durable GitHub webhook endpoint for local/sandbox validation only
 - Local development and container tooling
 - Automated formatting, linting, type checking, and tests
 
@@ -57,11 +59,13 @@ docker compose down
 
 ## Configuration
 
-Copy `.env.example` to `.env` for optional local overrides. The example contains no credentials. Revio does not load repository-level configuration in Phase 0.
+Copy `.env.example` to `.env` for optional local overrides. The example contains no credentials. Revio does not load repository-level configuration in Phase 2.
 
 ## Project status
 
-Phase 1 defines provider-neutral contracts but implements no real provider. GitHub Apps, webhooks, AI API calls, persistence, queues, publishing, Check Run API calls, and production deployment remain explicitly out of scope.
+Phase 2 provides read-only GitHub App authentication, SCM reads, and sandbox webhook normalization. The webhook is non-durable: a `202` response does not mean the event was stored. Enabling it in production is prohibited until Phase 3 adds atomic delivery and queue-job persistence. AI calls, persistence, queues, publishing, review comments, statuses, and Check Runs remain out of scope.
+
+When `REVIO_GITHUB_ENABLED=true`, application bootstrap validates the RSA key and registers the GitHub read and repository-content ports. Disabled GitHub configuration constructs no adapter and requires no credentials. The sandbox CLI uses the same adapter-private composition factory. Changed-file and tree output includes explicit completeness values; any value other than `complete` is partial and must not be interpreted as a complete repository view.
 
 ## Contributing and security
 

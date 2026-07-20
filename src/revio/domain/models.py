@@ -11,7 +11,7 @@ from revio.domain.identifiers import ChangeRequestTarget
 class DiffLine(BaseModel):
     model_config = ConfigDict(frozen=True)
     content: str
-    side: Literal["old", "new"]
+    side: Literal["old", "new", "context"]
     old_line: int | None = Field(default=None, gt=0)
     new_line: int | None = Field(default=None, gt=0)
 
@@ -19,10 +19,52 @@ class DiffLine(BaseModel):
 class DiffFile(BaseModel):
     model_config = ConfigDict(frozen=True)
     old_path: str | None = None
-    new_path: str
-    status: Literal["added", "modified", "deleted", "renamed"]
+    new_path: str | None = None
+    status: Literal["added", "modified", "deleted", "renamed", "copied"]
     lines: tuple[DiffLine, ...] = ()
-    truncated: bool = False
+    additions: int | None = Field(default=None, ge=0)
+    deletions: int | None = Field(default=None, ge=0)
+    changes: int | None = Field(default=None, ge=0)
+    patch_state: Literal[
+        "complete",
+        "missing",
+        "malformed",
+        "provider_truncated",
+        "no_textual_patch_unknown_reason",
+    ] = "complete"
+
+
+class CollectionCompleteness(BaseModel):
+    """Explicitly prevents partial provider data from appearing complete."""
+
+    model_config = ConfigDict(frozen=True)
+    status: Literal[
+        "complete", "provider_truncated", "service_page_limit", "service_item_limit"
+    ] = "complete"
+
+    @property
+    def is_complete(self) -> bool:
+        return self.status == "complete"
+
+
+class DiffCollection(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    items: tuple[DiffFile, ...] = ()
+    completeness: CollectionCompleteness = CollectionCompleteness()
+
+
+class RepositoryEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    path: str
+    entry_type: Literal["blob", "tree", "commit"]
+    sha: str = Field(min_length=1, max_length=128)
+    size: int | None = Field(default=None, ge=0)
+
+
+class TreeCollection(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    items: tuple[RepositoryEntry, ...] = ()
+    completeness: CollectionCompleteness = CollectionCompleteness()
 
 
 class ChangeRequest(BaseModel):

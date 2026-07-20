@@ -5,6 +5,10 @@ class RevioError(Exception):
     """Base class for expected Revio failures."""
 
 
+class IncompleteReviewInputError(RevioError):
+    """A review cannot safely proceed with incomplete provider input."""
+
+
 class RegistryError(RevioError):
     """Base registry failure."""
 

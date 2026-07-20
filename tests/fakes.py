@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from revio.domain.identifiers import ChangeRequestTarget
-from revio.domain.models import ChangeRequest, DiffFile, ReviewRequest, ReviewResult
+from revio.domain.models import ChangeRequest, DiffCollection, DiffFile, ReviewRequest, ReviewResult
 
 
 @dataclass
@@ -18,9 +18,9 @@ class FakeSCMReader:
         self.requested_targets.append(target)
         return self.change_request
 
-    async def get_diff(self, target: ChangeRequestTarget) -> list[DiffFile]:
+    async def get_diff(self, target: ChangeRequestTarget) -> DiffCollection:
         self.requested_targets.append(target)
-        return self.diff_files
+        return DiffCollection(items=tuple(self.diff_files))
 
 
 @dataclass

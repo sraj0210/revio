@@ -1,6 +1,8 @@
 """Shared Phase 1 fixtures."""
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from revio.domain.capabilities import ResolvedModelProfile
 from revio.domain.identifiers import (
@@ -36,3 +38,13 @@ def model_profile() -> ResolvedModelProfile:
         max_output_tokens=4_000,
         structured_output="json_schema",
     )
+
+
+@pytest.fixture(scope="session")
+def rsa_private_key_pem() -> str:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()

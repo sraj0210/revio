@@ -1,0 +1,6 @@
+{
+  "action": "opened",
+  "installation": {"id": 9001},
+  "repository": {"id": 10001, "name": "sandbox-repo", "full_name": "sandbox-owner/sandbox-repo"},
+  "pull_request": {"number": 7, "base": {"sha": "base-fixture-sha"}, "head": {"sha": "head-fixture-sha"}}
+}

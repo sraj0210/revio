@@ -20,14 +20,16 @@ classifiers = [
 dependencies = [
   "alembic>=1.14,<2",
   "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
   "pydantic-settings>=2.7,<3",
+  "pyjwt[crypto]>=2.10,<3",
   "sqlalchemy[asyncio]>=2.0,<3",
+  "unidiff>=0.7,<1",
   "uvicorn[standard]>=0.34,<1",
 ]
 
 [dependency-groups]
 dev = [
-  "httpx>=0.28,<1",
   "pre-commit>=4.0,<5",
   "pyright>=1.1.390,<2",
   "pytest>=8.3,<9",
@@ -64,3 +66,6 @@ venv = ".venv"
 
 [tool.uv]
 default-groups = ["dev"]
+
+[project.scripts]
+revio-github-sandbox = "revio.cli.github_sandbox:main"
