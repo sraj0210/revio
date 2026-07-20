@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS queue_jobs (
     updated_at TEXT NOT NULL,
     CHECK((state IN ({TERMINAL_STATES}) AND terminal_at IS NOT NULL)
        OR (state IN ({ACTIVE_STATES}) AND terminal_at IS NULL)),
+    CHECK(attempt_count <= max_attempts),
     CHECK((state = 'running' AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
        OR (state <> 'running' AND lease_owner IS NULL AND lease_expires_at IS NULL))
 );
@@ -59,6 +60,8 @@ CREATE INDEX IF NOT EXISTS ix_queue_jobs_lease
 ON queue_jobs(state, available_at, lease_expires_at, created_at);
 CREATE INDEX IF NOT EXISTS ix_queue_jobs_terminal_at
 ON queue_jobs(terminal_at) WHERE terminal_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_queue_jobs_pending_created
+ON queue_jobs(created_at) WHERE state = 'pending';
 CREATE INDEX IF NOT EXISTS ix_queue_jobs_expired
 ON queue_jobs(state, lease_expires_at);
 CREATE INDEX IF NOT EXISTS ix_queue_jobs_semantic_history
@@ -79,7 +82,13 @@ CREATE TABLE IF NOT EXISTS job_attempts (
     error_class TEXT,
     error_message TEXT,
     retry_delay_seconds REAL,
-    UNIQUE(job_id, attempt_number)
+    UNIQUE(job_id, attempt_number),
+    CHECK(outcome IS NULL OR outcome IN (
+        'retry', 'completed', 'dead', 'cancelled', 'superseded', 'lease_expired'
+    )),
+    CHECK((finished_at IS NULL AND outcome IS NULL AND error_class IS NULL
+           AND error_message IS NULL AND retry_delay_seconds IS NULL)
+       OR (finished_at IS NOT NULL AND outcome IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS installation_states (

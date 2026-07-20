@@ -75,3 +75,12 @@ class JobLease(BaseModel):
     worker_id: str
     attempt_number: int = Field(gt=0)
     expires_at: datetime
+
+
+class RetentionResult(BaseModel):
+    """Bounded terminal-history retention counts."""
+
+    model_config = ConfigDict(frozen=True)
+    jobs: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+    deliveries: int = Field(ge=0)

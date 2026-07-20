@@ -1,11 +1,16 @@
 """Provider-neutral durable persistence ports."""
 
-from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Protocol
 
 from revio.domain.events import WebhookNormalizationResult
-from revio.domain.queue import IngressReceipt, InstallationState, JobLease, QueueJob
+from revio.domain.queue import (
+    IngressReceipt,
+    InstallationState,
+    JobLease,
+    QueueJob,
+    RetentionResult,
+)
 
 
 class DurableIngressPort(Protocol):
@@ -48,5 +53,12 @@ class PersistenceReadinessPort(Protocol):
     async def check_ready(self) -> bool: ...
 
 
-class TransactionManager(Protocol):
-    def begin(self) -> AbstractAsyncContextManager[object]: ...
+class TerminalRetentionPort(Protocol):
+    async def retain_terminal_history(
+        self,
+        *,
+        cutoff: datetime,
+        batch_size: int,
+        dry_run: bool,
+        correlation_id: str,
+    ) -> RetentionResult: ...

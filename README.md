@@ -41,6 +41,7 @@ Apply the migration, then run the API and worker separately:
 
 ```bash
 REVIO_DATABASE_PATH=/absolute/path/revio.db uv run revio-db upgrade
+REVIO_DATABASE_PATH=/absolute/path/revio.db uv run revio-worker check-ready
 REVIO_DATABASE_PATH=/absolute/path/revio.db uv run revio-worker run
 uv run uvicorn revio.main:app --reload
 ```
@@ -71,6 +72,10 @@ Copy `.env.example` to `.env` for optional local overrides. The example contains
 ## Project status
 
 Phase 3 returns `202` in durable mode only after the delivery and any canonical active job commit atomically. Opened/synchronize events at one head coalesce while active; reopened is occurrence-specific. Workers check durable installation suspension/deletion before the only provider read, fetch current pull-request metadata, and never fetch a diff in Phase 3.
+
+Exactly one worker process is enforced by a process-lifetime lock next to the SQLite
+database. `revio-worker check-ready` is a pre-start check; a running worker exposes
+the separate `revio-worker health` command for container health checks.
 
 AI calls, publishing, review comments, statuses, Check Runs, `.revio.yml`, PostgreSQL, Redis, and multiple workers remain out of scope. The only GitHub POST is still installation-token exchange.
 

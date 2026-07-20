@@ -24,11 +24,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for name in (
-        "webhook_delivery_tombstones",
-        "installation_states",
-        "job_attempts",
-        "queue_jobs",
-        "webhook_deliveries",
-    ):
-        op.execute(f"DROP TABLE IF EXISTS {name}")
+    raise RuntimeError(
+        "Phase 3 downgrade is unsupported because it would destroy durable queue history"
+    )

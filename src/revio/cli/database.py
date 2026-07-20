@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import json
+import sys
 
 from alembic import command
 from alembic.config import Config
@@ -11,6 +12,7 @@ from revio.adapters.persistence.sqlite import SQLiteStore
 from revio.adapters.persistence.sqlite.locks import MaintenanceLock
 from revio.application.retention import retain_terminal_history
 from revio.config.database import DatabaseSettings
+from revio.errors import PersistenceUnavailableError, RetentionIntegrityError
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -75,6 +77,10 @@ def main() -> None:
         else:
             if args.execute and not args.backup_confirmed:
                 raise SystemExit("--backup-confirmed is required for execution")
-            if args.execute:
-                asyncio.run(_checkpoint(settings))
-            asyncio.run(_retain(settings, args.dry_run))
+            try:
+                if args.execute:
+                    asyncio.run(_checkpoint(settings))
+                asyncio.run(_retain(settings, args.dry_run))
+            except (PersistenceUnavailableError, RetentionIntegrityError):
+                print("terminal retention failed safely", file=sys.stderr)
+                raise SystemExit(1) from None

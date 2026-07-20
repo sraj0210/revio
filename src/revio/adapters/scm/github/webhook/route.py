@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+import uuid
 from datetime import UTC, datetime
 from email.message import Message
 from typing import Any, cast
@@ -55,6 +56,7 @@ async def _bounded_body(request: Request, limit: int) -> bytes:
 
 @router.post("/webhooks/github")
 async def github_webhook(request: Request) -> JSONResponse:
+    correlation_id = uuid.uuid4().hex
     settings: GitHubSettings = request.app.state.github_settings
     if settings.github_webhook_mode == "disabled":
         raise HTTPException(status_code=404, detail="not found")
@@ -91,7 +93,10 @@ async def github_webhook(request: Request) -> JSONResponse:
                 received_at=datetime.now(UTC),
             )
             if receipt.disposition == IngressDisposition.CONFLICT:
-                logger.warning("github_webhook_delivery_integrity_conflict")
+                logger.warning(
+                    "github_webhook_delivery_integrity_conflict",
+                    extra={"correlation_id": correlation_id},
+                )
                 raise HTTPException(status_code=409, detail="delivery integrity conflict")
             event = normalization.event
             if (
@@ -105,18 +110,24 @@ async def github_webhook(request: Request) -> JSONResponse:
     except (GitHubResponseError, InvalidJobError):
         raise HTTPException(status_code=400, detail="invalid payload") from None
     except QueueCapacityError:
-        logger.warning("github_webhook_active_capacity_rejected")
+        logger.warning(
+            "github_webhook_active_capacity_rejected",
+            extra={"correlation_id": correlation_id},
+        )
         return JSONResponse(
             status_code=503,
             content={"detail": "durable ingress unavailable"},
             headers={"Retry-After": "1"},
         )
     except PersistenceUnavailableError:
-        logger.warning("github_webhook_persistence_unavailable")
+        logger.warning(
+            "github_webhook_persistence_unavailable",
+            extra={"correlation_id": correlation_id},
+        )
         return JSONResponse(
             status_code=503,
             content={"detail": "durable ingress unavailable"},
             headers={"Retry-After": "1"},
         )
-    logger.info("github_webhook_%s", status)
+    logger.info("github_webhook_%s", status, extra={"correlation_id": correlation_id})
     return JSONResponse(status_code=202, content={"status": status})

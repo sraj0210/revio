@@ -49,5 +49,13 @@ class InvalidJobError(RevioError):
     """A durable job cannot be decoded or processed safely."""
 
 
+class LeaseLostError(RevioError):
+    """The worker no longer owns the lease required for a state transition."""
+
+
+class RetentionIntegrityError(PersistenceError):
+    """Retention found a conflicting permanent delivery identity."""
+
+
 class ProviderTransientError(RevioError):
     """A provider read may be retried safely."""

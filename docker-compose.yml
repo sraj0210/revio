@@ -8,6 +8,7 @@ services:
       REVIO_GITHUB_ENABLED: ${REVIO_GITHUB_ENABLED:-false}
       REVIO_GITHUB_WEBHOOK_MODE: ${REVIO_GITHUB_WEBHOOK_MODE:-disabled}
       REVIO_GITHUB_APP_ID: ${REVIO_GITHUB_APP_ID:-}
+      REVIO_GITHUB_PRIVATE_KEY: ${REVIO_GITHUB_PRIVATE_KEY:-}
       REVIO_GITHUB_PRIVATE_KEY_FILE: ${REVIO_GITHUB_PRIVATE_KEY_FILE:-}
       REVIO_GITHUB_WEBHOOK_SECRET: ${REVIO_GITHUB_WEBHOOK_SECRET:-}
     volumes:
@@ -50,8 +51,10 @@ services:
         condition: service_completed_successfully
     init: true
     restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 40s
     healthcheck:
-      test: ["CMD", "/app/.venv/bin/revio-worker", "check-ready"]
+      test: ["CMD", "/app/.venv/bin/revio-worker", "health"]
       interval: 5s
       timeout: 3s
       retries: 5

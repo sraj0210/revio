@@ -15,7 +15,7 @@ class QueueSettings(BaseSettings):
     queue_retry_max_seconds: float = Field(default=300, gt=0, le=86_400)
     queue_retry_jitter_ratio: float = Field(default=0.2, ge=0, le=1)
     queue_worker_concurrency: int = Field(default=1, ge=1, le=1)
-    queue_shutdown_timeout_seconds: float = Field(default=30, gt=0, le=600)
+    queue_shutdown_timeout_seconds: float = Field(default=30, gt=0, le=35)
     queue_max_active_jobs: int = Field(default=10_000, ge=1, le=1_000_000)
     queue_max_event_json_bytes: int = Field(default=16_384, ge=1_024, le=1_048_576)
 
