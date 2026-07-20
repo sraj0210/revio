@@ -1,9 +1,30 @@
 services:
-  revio:
+  migrate:
     build:
       context: .
+    command: ["/app/.venv/bin/revio-db", "upgrade"]
+    environment: &revio-environment
+      REVIO_DATABASE_PATH: /var/lib/revio/revio.db
+      REVIO_GITHUB_ENABLED: ${REVIO_GITHUB_ENABLED:-false}
+      REVIO_GITHUB_WEBHOOK_MODE: ${REVIO_GITHUB_WEBHOOK_MODE:-disabled}
+      REVIO_GITHUB_APP_ID: ${REVIO_GITHUB_APP_ID:-}
+      REVIO_GITHUB_PRIVATE_KEY_FILE: ${REVIO_GITHUB_PRIVATE_KEY_FILE:-}
+      REVIO_GITHUB_WEBHOOK_SECRET: ${REVIO_GITHUB_WEBHOOK_SECRET:-}
+    volumes:
+      - revio-data:/var/lib/revio
+    restart: "no"
+
+  api:
+    build:
+      context: .
+    environment: *revio-environment
     ports:
       - "${REVIO_PORT:-8000}:8000"
+    volumes:
+      - revio-data:/var/lib/revio
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     init: true
     restart: unless-stopped
     healthcheck:
@@ -11,8 +32,30 @@ services:
         - CMD
         - /app/.venv/bin/python
         - -c
-        - "import json, urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2); assert response.status == 200; assert json.load(response) == {'status': 'ok'}"
+        - "import json, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/ready',timeout=2); assert r.status==200; assert json.load(r)=={'status':'ready'}"
       interval: 5s
       timeout: 3s
       retries: 5
       start_period: 5s
+
+  worker:
+    build:
+      context: .
+    command: ["/app/.venv/bin/revio-worker", "run"]
+    environment: *revio-environment
+    volumes:
+      - revio-data:/var/lib/revio
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/revio-worker", "check-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  revio-data:

@@ -8,13 +8,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN groupadd --system revio \
-    && useradd --system --gid revio --home-dir /app revio
+    && useradd --system --gid revio --home-dir /app revio \
+    && mkdir -p /var/lib/revio \
+    && chown revio:revio /var/lib/revio \
+    && chmod 700 /var/lib/revio
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
-COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE alembic.ini ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src
+COPY migrations ./migrations
 RUN uv sync --frozen --no-dev
 
 USER revio

@@ -30,6 +30,11 @@ jobs:
         run: uv run pyright
       - name: Test
         run: uv run pytest
+      - name: Validate empty database migration and revision
+        run: |
+          export REVIO_DATABASE_PATH="$RUNNER_TEMP/revio.db"
+          uv run revio-db upgrade
+          uv run revio-db check
 
   container:
     runs-on: ubuntu-latest
@@ -40,7 +45,10 @@ jobs:
       - name: Start healthy service
         run: docker compose up --detach --wait --wait-timeout 60
       - name: Verify health endpoint
-        run: curl --fail --silent --show-error http://127.0.0.1:8000/health
+        run: |
+          curl --fail --silent --show-error http://127.0.0.1:8000/health
+          curl --fail --silent --show-error http://127.0.0.1:8000/ready
+          docker compose exec -T worker /app/.venv/bin/revio-worker check-ready
       - name: Show service logs
         if: failure()
         run: docker compose logs
