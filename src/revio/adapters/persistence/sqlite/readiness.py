@@ -38,16 +38,61 @@ class SQLiteReadinessRepository:
             if revisions != {SCHEMA_REVISION}:
                 return False
             if include_integrity:
-                overlaps = list(
-                    await connection.execute_fetchall(
-                        "SELECT 1 FROM webhook_deliveries d "
-                        "JOIN webhook_delivery_tombstones t "
-                        "ON d.provider_id=t.provider_id "
-                        "AND d.delivery_identity=t.delivery_identity LIMIT 1"
-                    )
+                integrity_queries = (
+                    "SELECT 1 FROM webhook_deliveries d "
+                    "JOIN webhook_delivery_tombstones t "
+                    "ON d.provider_id=t.provider_id "
+                    "AND d.delivery_identity=t.delivery_identity LIMIT 1",
+                    "SELECT 1 FROM webhook_deliveries d WHERE d.disposition='accepted' "
+                    "AND d.normalized_event_json IS NOT NULL "
+                    "AND json_valid(d.normalized_event_json) AND ("
+                    "(json_extract(d.normalized_event_json,'$.event_type')='change_request' "
+                    "AND d.linked_job_id IS NULL) OR "
+                    "(json_extract(d.normalized_event_json,'$.event_type')='installation' "
+                    "AND d.linked_job_id IS NOT NULL)) LIMIT 1",
+                    "SELECT 1 FROM webhook_deliveries d "
+                    "WHERE d.normalized_event_json IS NOT NULL AND ("
+                    "NOT json_valid(d.normalized_event_json) OR "
+                    "json_extract(d.normalized_event_json,'$.provider_id.value') "
+                    "IS NOT d.provider_id OR "
+                    "json_extract(d.normalized_event_json,'$.delivery_identity') "
+                    "IS NOT d.delivery_identity OR "
+                    "json_extract(d.normalized_event_json,'$.semantic_identity') "
+                    "IS NOT d.semantic_identity) LIMIT 1",
+                    "SELECT 1 FROM webhook_deliveries d "
+                    "LEFT JOIN queue_jobs q ON q.id=d.linked_job_id "
+                    "WHERE d.linked_job_id IS NOT NULL AND ("
+                    "d.disposition<>'accepted' OR d.event_schema_version IS NOT 1 "
+                    "OR d.normalized_event_json IS NULL "
+                    "OR NOT json_valid(d.normalized_event_json) "
+                    "OR d.semantic_identity IS NULL OR q.id IS NULL "
+                    "OR q.job_type<>'change_request_validation' "
+                    "OR q.provider_id<>d.provider_id "
+                    "OR q.semantic_identity<>d.semantic_identity "
+                    "OR q.event_schema_version IS NOT d.event_schema_version "
+                    "OR q.event_json IS NOT d.normalized_event_json "
+                    "OR NOT json_valid(q.event_json)) LIMIT 1",
+                    "SELECT 1 FROM installation_states s "
+                    "LEFT JOIN webhook_deliveries d ON d.id=s.source_delivery_id "
+                    "WHERE d.id IS NULL OR d.provider_id<>s.provider_id "
+                    "OR d.event_name<>'installation' OR d.disposition<>'accepted' "
+                    "OR d.event_schema_version IS NOT 1 OR d.normalized_event_json IS NULL "
+                    "OR NOT json_valid(d.normalized_event_json) "
+                    "OR json_extract(d.normalized_event_json,'$.event_type')<>'installation' "
+                    "OR json_extract(d.normalized_event_json,'$.delivery_identity')"
+                    "<>d.delivery_identity "
+                    "OR json_extract(d.normalized_event_json,'$.semantic_identity')"
+                    "<>d.semantic_identity "
+                    "OR json_extract(d.normalized_event_json,"
+                    "'$.installation.external_id')<>s.installation_id "
+                    "OR s.state<>CASE json_extract(d.normalized_event_json,'$.trigger') "
+                    "WHEN 'created' THEN 'active' WHEN 'unsuspend' THEN 'active' "
+                    "WHEN 'suspend' THEN 'suspended' WHEN 'deleted' THEN 'deleted' "
+                    "ELSE NULL END LIMIT 1",
                 )
-                if overlaps:
-                    return False
+                for query in integrity_queries:
+                    if list(await connection.execute_fetchall(query)):
+                        return False
             cursor = await connection.execute(
                 "UPDATE queue_jobs SET updated_at=updated_at WHERE 0 RETURNING id"
             )

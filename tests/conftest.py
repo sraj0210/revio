@@ -11,7 +11,7 @@ from alembic.config import Config
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from revio.adapters.persistence.sqlite.connection import FailureHook
+from revio.adapters.persistence.sqlite.connection import CoordinationHook, FailureHook
 from revio.adapters.persistence.sqlite.schema import SCHEMA_REVISION
 from revio.adapters.persistence.sqlite.store import SQLiteStore
 from revio.config.database import DatabaseSettings
@@ -38,11 +38,13 @@ class AlembicDatabase:
         queue: QueueSettings | None = None,
         *,
         failure_hook: FailureHook | None = None,
+        coordination_hook: CoordinationHook | None = None,
     ) -> SQLiteStore:
         return SQLiteStore(
             DatabaseSettings(database_path=self.path),
             queue,
             failure_hook=failure_hook,
+            coordination_hook=coordination_hook,
         )
 
 

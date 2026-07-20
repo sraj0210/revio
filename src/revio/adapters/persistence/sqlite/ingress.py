@@ -5,18 +5,19 @@ from datetime import datetime
 from typing import cast
 
 import aiosqlite
+from pydantic import ValidationError
 
 from revio.adapters.persistence.sqlite.connection import SQLiteConnectionPolicy
 from revio.adapters.persistence.sqlite.installations import SQLiteInstallationRepository
 from revio.adapters.persistence.sqlite.schema import ACTIVE_JOB_INSERT_SQL
 from revio.adapters.persistence.sqlite.values import timestamp
 from revio.config.queue import QueueSettings
-from revio.domain.events import WebhookNormalizationResult
+from revio.domain.events import ReviewEvent, WebhookNormalizationResult
 from revio.domain.queue import IngressDisposition, IngressReceipt
 from revio.errors import (
     InvalidJobError,
     PersistenceIntegrityError,
-    PersistenceUnavailableError,
+    PersistenceNotCommittedError,
     QueueCapacityError,
 )
 
@@ -31,6 +32,25 @@ class SQLiteIngressRepository:
         self._connections = connections
         self._installations = installations
         self._queue = queue
+
+    @staticmethod
+    def _lifecycle_state(event: ReviewEvent) -> str | None:
+        return {
+            "created": "active",
+            "unsuspend": "active",
+            "suspend": "suspended",
+            "deleted": "deleted",
+        }.get(event.trigger)
+
+    @staticmethod
+    def _decode_lifecycle(value: object) -> ReviewEvent | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            event = ReviewEvent.model_validate_json(value)
+        except (TypeError, ValueError, ValidationError):
+            return None
+        return event if event.event_type == "installation" else None
 
     async def persist(
         self,
@@ -57,6 +77,9 @@ class SQLiteIngressRepository:
             )
 
         async def reconcile(expected: IngressReceipt) -> IngressReceipt:
+            event = normalization.event
+            expected_event_json = event.model_dump_json() if event is not None else None
+
             async def read(connection: aiosqlite.Connection) -> IngressReceipt:
                 tombstones = list(
                     await connection.execute_fetchall(
@@ -67,7 +90,9 @@ class SQLiteIngressRepository:
                 )
                 deliveries = list(
                     await connection.execute_fetchall(
-                        "SELECT id, payload_sha256, disposition, linked_job_id "
+                        "SELECT id, provider_id, delivery_identity, payload_sha256, disposition, "
+                        "linked_job_id, event_name, "
+                        "event_schema_version, normalized_event_json, semantic_identity "
                         "FROM webhook_deliveries "
                         "WHERE provider_id=? AND delivery_identity=?",
                         (provider_id, delivery_identity),
@@ -96,8 +121,28 @@ class SQLiteIngressRepository:
                         )
                     return IngressReceipt(disposition=disposition)
                 if not deliveries:
-                    raise PersistenceUnavailableError("durable ingress commit was not confirmed")
+                    if event is not None:
+                        partial = list(
+                            await connection.execute_fetchall(
+                                "SELECT 1 FROM webhook_deliveries WHERE "
+                                "normalized_event_json=? OR semantic_identity=? "
+                                "OR linked_job_id=? LIMIT 1",
+                                (expected_event_json, event.semantic_identity, expected.job_id),
+                            )
+                        )
+                        if partial:
+                            raise PersistenceIntegrityError(
+                                "durable ingress reconciliation found inconsistent state"
+                            )
+                    raise PersistenceNotCommittedError("durable ingress commit was not confirmed")
                 delivery = deliveries[0]
+                if (
+                    delivery["provider_id"] != provider_id
+                    or delivery["delivery_identity"] != delivery_identity
+                ):
+                    raise PersistenceIntegrityError(
+                        "durable ingress reconciliation found inconsistent state"
+                    )
                 if delivery["payload_sha256"] != payload_sha256:
                     if expected.disposition == IngressDisposition.CONFLICT:
                         return expected
@@ -108,66 +153,85 @@ class SQLiteIngressRepository:
                     raise PersistenceIntegrityError(
                         "durable ingress reconciliation found inconsistent state"
                     )
-                if expected.disposition == IngressDisposition.IDEMPOTENT:
-                    return IngressReceipt(
-                        disposition=IngressDisposition.IDEMPOTENT,
-                        job_id=cast(str | None, delivery["linked_job_id"]),
-                    )
                 if delivery["disposition"] != normalization.disposition:
                     raise PersistenceIntegrityError(
                         "durable ingress reconciliation found inconsistent state"
                     )
-                if cast(str | None, delivery["linked_job_id"]) != expected.job_id:
+                if (
+                    delivery["event_name"] != event_name
+                    or delivery["event_schema_version"] != (1 if event is not None else None)
+                    or delivery["normalized_event_json"] != expected_event_json
+                    or delivery["semantic_identity"]
+                    != (event.semantic_identity if event is not None else None)
+                    or cast(str | None, delivery["linked_job_id"]) != expected.job_id
+                ):
                     raise PersistenceIntegrityError(
                         "durable ingress reconciliation found inconsistent state"
                     )
                 if expected.job_id is not None:
                     jobs = list(
                         await connection.execute_fetchall(
-                            "SELECT semantic_identity FROM queue_jobs WHERE id=?",
+                            "SELECT job_type, semantic_identity, event_schema_version, event_json "
+                            "FROM queue_jobs WHERE id=?",
                             (expected.job_id,),
                         )
                     )
-                    event = normalization.event
                     if (
                         not jobs
                         or event is None
+                        or jobs[0]["job_type"] != "change_request_validation"
                         or jobs[0]["semantic_identity"] != event.semantic_identity
+                        or jobs[0]["event_schema_version"] != 1
+                        or jobs[0]["event_json"] != expected_event_json
                     ):
                         raise PersistenceIntegrityError(
                             "durable ingress reconciliation found inconsistent state"
                         )
-                event = normalization.event
                 if event is not None and event.event_type == "installation":
                     states = list(
                         await connection.execute_fetchall(
-                            "SELECT source_delivery_id FROM installation_states "
+                            "SELECT state, source_delivery_id FROM installation_states "
                             "WHERE provider_id=? AND installation_id=?",
                             (provider_id, event.installation.external_id),
                         )
                     )
-                    if not states or states[0]["source_delivery_id"] != delivery["id"]:
-                        current_source = (
-                            cast(str | None, states[0]["source_delivery_id"]) if states else None
+                    if not states:
+                        raise PersistenceIntegrityError(
+                            "durable ingress reconciliation found inconsistent state"
                         )
-                        successors = (
-                            list(
-                                await connection.execute_fetchall(
-                                    "SELECT 1 FROM webhook_deliveries "
-                                    "WHERE id=? AND provider_id=? AND event_name='installation' "
-                                    "AND json_extract(normalized_event_json, "
-                                    "'$.installation.external_id')=?",
-                                    (
-                                        current_source,
-                                        provider_id,
-                                        event.installation.external_id,
-                                    ),
-                                )
+                    state = states[0]
+                    expected_state = self._lifecycle_state(event)
+                    if state["source_delivery_id"] == delivery["id"]:
+                        if expected_state is None or state["state"] != expected_state:
+                            raise PersistenceIntegrityError(
+                                "durable ingress reconciliation found inconsistent state"
                             )
-                            if current_source is not None
-                            else []
+                    else:
+                        sources = list(
+                            await connection.execute_fetchall(
+                                "SELECT provider_id, delivery_identity, event_name, disposition, "
+                                "event_schema_version, normalized_event_json, semantic_identity "
+                                "FROM webhook_deliveries WHERE id=?",
+                                (state["source_delivery_id"],),
+                            )
                         )
-                        if not successors:
+                        source_event = (
+                            self._decode_lifecycle(sources[0]["normalized_event_json"])
+                            if sources
+                            else None
+                        )
+                        if (
+                            not sources
+                            or source_event is None
+                            or sources[0]["provider_id"] != provider_id
+                            or sources[0]["delivery_identity"] != source_event.delivery_identity
+                            or sources[0]["event_name"] != "installation"
+                            or sources[0]["disposition"] != IngressDisposition.ACCEPTED
+                            or sources[0]["event_schema_version"] != 1
+                            or sources[0]["semantic_identity"] != source_event.semantic_identity
+                            or source_event.installation != event.installation
+                            or self._lifecycle_state(source_event) != state["state"]
+                        ):
                             raise PersistenceIntegrityError(
                                 "durable ingress reconciliation found inconsistent state"
                             )

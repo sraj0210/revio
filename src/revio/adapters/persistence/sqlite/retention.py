@@ -12,6 +12,7 @@ from revio.adapters.persistence.sqlite.values import timestamp
 from revio.domain.queue import RetentionResult
 from revio.errors import (
     PersistenceIntegrityError,
+    PersistenceNotCommittedError,
     PersistenceUnavailableError,
     RetentionIntegrityError,
 )
@@ -187,7 +188,7 @@ class SQLiteTerminalRetentionRepository:
                 ):
                     return expected
                 if len(jobs) == len(expected.job_ids) and len(live) == len(expected.delivery_facts):
-                    raise PersistenceUnavailableError("retention commit was not confirmed")
+                    raise PersistenceNotCommittedError("retention commit was not confirmed")
                 raise PersistenceIntegrityError(
                     "retention commit reconciliation found inconsistent state"
                 )

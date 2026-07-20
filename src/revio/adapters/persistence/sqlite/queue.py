@@ -14,7 +14,7 @@ from revio.adapters.persistence.sqlite.values import datetime_value, timestamp
 from revio.config.queue import QueueSettings
 from revio.domain.events import ReviewEvent
 from revio.domain.queue import InstallationState, JobLease, QueueJob
-from revio.errors import InvalidJobError, PersistenceIntegrityError, PersistenceUnavailableError
+from revio.errors import InvalidJobError, PersistenceIntegrityError, PersistenceNotCommittedError
 
 INVALID_JOB_CLEANUP_BATCH_SIZE = 64
 
@@ -167,9 +167,9 @@ class SQLiteQueueRepository:
             if confirmed_terminal == expected_count and lease_confirmed:
                 return expected
             if confirmed_terminal == 0 and not lease_confirmed:
-                raise PersistenceUnavailableError("queue commit was not confirmed")
+                raise PersistenceNotCommittedError("queue commit was not confirmed")
             if expected.lease is None and confirmed_terminal == 0 and expected_count:
-                raise PersistenceUnavailableError("queue commit was not confirmed")
+                raise PersistenceNotCommittedError("queue commit was not confirmed")
             raise PersistenceIntegrityError("queue commit reconciliation found inconsistent state")
 
         return await self._connections.read(read)
@@ -326,7 +326,7 @@ class SQLiteQueueRepository:
                     and rows[0]["lease_expires_at"] == expected_expiry
                 ):
                     return True
-                raise PersistenceUnavailableError("queue heartbeat commit was not confirmed")
+                raise PersistenceNotCommittedError("queue heartbeat commit was not confirmed")
 
             return await self._connections.read(read)
 
@@ -414,7 +414,7 @@ class SQLiteQueueRepository:
                 ):
                     return True
                 if rows and rows[0]["state"] == "running":
-                    raise PersistenceUnavailableError("queue transition commit was not confirmed")
+                    raise PersistenceNotCommittedError("queue transition commit was not confirmed")
                 raise PersistenceIntegrityError(
                     "queue commit reconciliation found inconsistent state"
                 )
@@ -500,7 +500,7 @@ class SQLiteQueueRepository:
                 ):
                     return True
                 if rows and rows[0]["state"] == "running":
-                    raise PersistenceUnavailableError("queue retry commit was not confirmed")
+                    raise PersistenceNotCommittedError("queue retry commit was not confirmed")
                 raise PersistenceIntegrityError(
                     "queue commit reconciliation found inconsistent state"
                 )
@@ -535,7 +535,7 @@ class SQLiteQueueRepository:
                 if confirmed == set(expected):
                     return expected
                 if not confirmed:
-                    raise PersistenceUnavailableError("queue recovery commit was not confirmed")
+                    raise PersistenceNotCommittedError("queue recovery commit was not confirmed")
                 raise PersistenceIntegrityError(
                     "queue commit reconciliation found inconsistent state"
                 )

@@ -73,6 +73,8 @@ Copy `.env.example` to `.env` for optional local overrides. The example contains
 
 Phase 3 returns `202` in durable mode only after the delivery and any canonical active job commit atomically. Opened/synchronize events at one head coalesce while active; reopened is occurrence-specific. Workers check durable installation suspension/deletion before the only provider read, fetch current pull-request metadata, and never fetch a diff in Phase 3.
 
+Durable ingress uses `503 {"status":"not_accepted"}` only when persistence is confirmed absent. `500 {"status":"indeterminate"}` means commit disposition could not be established; an exact later redelivery is safe because delivery identity and payload hash remain idempotently enforced. Sanitized integrity failures use `500 {"status":"integrity_error"}` and make readiness fail while contradictory durable facts remain.
+
 Exactly one worker process is enforced by a process-lifetime lock next to the SQLite
 database. `revio-worker check-ready` is a pre-start check; a running worker exposes
 the separate `revio-worker health` command for container health checks.

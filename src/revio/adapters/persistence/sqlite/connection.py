@@ -7,6 +7,7 @@ import sys
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -14,15 +15,30 @@ import aiosqlite
 
 from revio.adapters.persistence.sqlite.capabilities import require_supported_sqlite
 from revio.config.database import DatabaseSettings
-from revio.errors import PersistenceIntegrityError, PersistenceUnavailableError
+from revio.errors import (
+    PersistenceIndeterminateError,
+    PersistenceIntegrityError,
+    PersistenceNotCommittedError,
+    PersistenceUnavailableError,
+)
 from revio.ports.observability import QueueMetricsPort
 
 T = TypeVar("T")
 FailureHook = Callable[[str], None]
+CoordinationHook = Callable[[str], Awaitable[None]]
 WriteOperation = Callable[[aiosqlite.Connection], Awaitable[T]]
 ReadOperation = Callable[[aiosqlite.Connection], Awaitable[T]]
 CommitReconciler = Callable[[T], Awaitable[T]]
 COMMIT_RECONCILIATION_SECONDS = 1.0
+
+
+class CommitDisposition(StrEnum):
+    """Internal durable-transaction disposition after commit or reconciliation."""
+
+    COMMITTED = "committed"
+    NOT_COMMITTED = "not_committed"
+    INDETERMINATE = "indeterminate"
+    INTEGRITY_ERROR = "integrity_error"
 
 
 def is_busy(error: aiosqlite.OperationalError) -> bool:
@@ -131,16 +147,22 @@ class SQLiteConnectionPolicy:
         *,
         metrics: QueueMetricsPort | None = None,
         failure_hook: FailureHook | None = None,
+        coordination_hook: CoordinationHook | None = None,
     ) -> None:
         require_supported_sqlite()
         self.settings = settings
         self.path = settings.database_path
         self.metrics = metrics
         self.failure_hook = failure_hook
+        self.coordination_hook = coordination_hook
 
     def fail(self, stage: str) -> None:
         if self.failure_hook is not None:
             self.failure_hook(stage)
+
+    async def coordinate(self, stage: str) -> None:
+        if self.coordination_hook is not None:
+            await self.coordination_hook(stage)
 
     def metric(self, name: str, *, outcome: str | None = None) -> None:
         if self.metrics is not None:
@@ -171,7 +193,6 @@ class SQLiteConnectionPolicy:
             self.settings.database_busy_timeout_ms if busy_timeout_ms is None else busy_timeout_ms
         )
         policy_failed = False
-        cleanup_failed = False
         journal: list[aiosqlite.Row] = []
         synchronous: list[aiosqlite.Row] = []
         foreign_keys: list[aiosqlite.Row] = []
@@ -200,14 +221,15 @@ class SQLiteConnectionPolicy:
                 ) from None
             yield connection
         finally:
+            cleanup_failed = False
             try:
                 await self._settle(connection.close)
             except asyncio.CancelledError:
                 raise
             except aiosqlite.Error:
                 cleanup_failed = True
-        if cleanup_failed:
-            raise PersistenceUnavailableError("database connection cleanup failed safely")
+            if cleanup_failed:
+                self.metric("database_cleanup_error")
 
     async def _settle(self, operation: Callable[[], Coroutine[Any, Any, None]]) -> None:
         task = asyncio.create_task(operation())
@@ -242,15 +264,32 @@ class SQLiteConnectionPolicy:
         return cast(T, result)
 
     async def _reconcile_commit(self, reconciler: CommitReconciler[T], result: T) -> T:
-        timed_out = False
+        disposition = CommitDisposition.INDETERMINATE
+        resolved: T | None = None
         try:
             async with asyncio.timeout(COMMIT_RECONCILIATION_SECONDS):
-                return await reconciler(result)
+                try:
+                    await self.coordinate("before_reconcile")
+                    resolved = await reconciler(result)
+                except PersistenceNotCommittedError:
+                    disposition = CommitDisposition.NOT_COMMITTED
+                except PersistenceIntegrityError:
+                    disposition = CommitDisposition.INTEGRITY_ERROR
+                except PersistenceUnavailableError:
+                    disposition = CommitDisposition.INDETERMINATE
+                except asyncio.CancelledError:
+                    disposition = CommitDisposition.INDETERMINATE
+                else:
+                    disposition = CommitDisposition.COMMITTED
         except TimeoutError:
-            timed_out = True
-        if timed_out:
-            raise PersistenceUnavailableError("database commit outcome could not be confirmed")
-        raise AssertionError("unreachable commit reconciliation state")
+            disposition = CommitDisposition.INDETERMINATE
+        if disposition == CommitDisposition.COMMITTED:
+            return cast(T, resolved)
+        if disposition == CommitDisposition.NOT_COMMITTED:
+            raise PersistenceNotCommittedError("database commit was confirmed absent")
+        if disposition == CommitDisposition.INTEGRITY_ERROR:
+            raise PersistenceIntegrityError("database commit reconciliation found unsafe state")
+        raise PersistenceIndeterminateError("database commit disposition is indeterminate")
 
     async def write(
         self,
@@ -274,11 +313,12 @@ class SQLiteConnectionPolicy:
                 ),
             )
             begin_failed = False
-            commit_failed = False
+            commit_disposition = CommitDisposition.INDETERMINATE
             result: T | None = None
             async with self.connect(busy_timeout_ms=effective_ms) as connection:
                 try:
                     self.fail("before_begin")
+                    await self.coordinate("before_begin")
                     await connection.execute("BEGIN IMMEDIATE")
                 except asyncio.CancelledError:
                     await self._rollback_after_cancellation(connection)
@@ -325,24 +365,27 @@ class SQLiteConnectionPolicy:
                 except asyncio.CancelledError:
                     raise
                 except aiosqlite.Error:
-                    commit_failed = True
                     if connection.in_transaction:
                         try:
                             await self._settle(connection.rollback)
                         except aiosqlite.Error:
                             pass
+                else:
+                    commit_disposition = (
+                        CommitDisposition.COMMITTED if commit else CommitDisposition.NOT_COMMITTED
+                    )
             resolved_result = cast(T, result)
-            if commit_failed:
-                if not commit:
-                    raise PersistenceUnavailableError(
-                        "database rollback outcome could not be confirmed"
-                    )
-                if reconcile is None:
-                    raise PersistenceIntegrityError(
-                        "database commit outcome could not be reconciled"
-                    )
-                return await self._reconcile_commit(reconcile, resolved_result)
-            return resolved_result
+            if commit_disposition == CommitDisposition.COMMITTED:
+                return resolved_result
+            if not commit:
+                if commit_disposition == CommitDisposition.NOT_COMMITTED:
+                    return resolved_result
+                raise PersistenceUnavailableError(
+                    "database rollback outcome could not be confirmed"
+                )
+            if reconcile is None:
+                raise PersistenceIndeterminateError("database commit disposition is indeterminate")
+            return await self._reconcile_commit(reconcile, resolved_result)
 
         self.metric("database_busy_exhausted")
         raise PersistenceUnavailableError("database is temporarily unavailable") from None

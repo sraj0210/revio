@@ -20,7 +20,9 @@ from revio.config.github import GitHubSettings
 from revio.domain.queue import IngressDisposition
 from revio.errors import (
     InvalidJobError,
+    PersistenceIndeterminateError,
     PersistenceIntegrityError,
+    PersistenceNotCommittedError,
     PersistenceUnavailableError,
     QueueCapacityError,
 )
@@ -121,18 +123,30 @@ async def github_webhook(request: Request) -> JSONResponse:
         )
         return JSONResponse(
             status_code=503,
-            content={"detail": "durable ingress unavailable"},
+            content={"status": "not_accepted"},
             headers={"Retry-After": "1"},
         )
-    except (PersistenceUnavailableError, PersistenceIntegrityError):
+    except (PersistenceNotCommittedError, PersistenceUnavailableError):
         logger.warning(
             "github_webhook_persistence_unavailable",
             extra={"correlation_id": correlation_id},
         )
         return JSONResponse(
             status_code=503,
-            content={"detail": "durable ingress unavailable"},
+            content={"status": "not_accepted"},
             headers={"Retry-After": "1"},
         )
+    except PersistenceIndeterminateError:
+        logger.error(
+            "github_webhook_persistence_indeterminate",
+            extra={"correlation_id": correlation_id},
+        )
+        return JSONResponse(status_code=500, content={"status": "indeterminate"})
+    except PersistenceIntegrityError:
+        logger.error(
+            "github_webhook_persistence_integrity_error",
+            extra={"correlation_id": correlation_id},
+        )
+        return JSONResponse(status_code=500, content={"status": "integrity_error"})
     logger.info("github_webhook_%s", status, extra={"correlation_id": correlation_id})
     return JSONResponse(status_code=202, content={"status": status})

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from revio.application.queue.processor import QueueProcessor
 from revio.config.queue import QueueSettings
 from revio.domain.queue import JobLease
-from revio.errors import LeaseLostError, PersistenceUnavailableError
+from revio.errors import LeaseLostError, PersistenceIndeterminateError, PersistenceUnavailableError
 from revio.ports.observability import QueueMetricsPort
 from revio.ports.persistence import QueueRepository
 from revio.ports.time import Clock
@@ -50,7 +50,7 @@ class QueueWorker:
             except TimeoutError:
                 try:
                     owned = await self._repository.heartbeat(lease, self._now())
-                except PersistenceUnavailableError:
+                except (PersistenceUnavailableError, PersistenceIndeterminateError):
                     work.cancel()
                     raise
                 if not owned:
@@ -90,7 +90,7 @@ class QueueWorker:
                 heartbeat_handled = True
                 try:
                     heartbeat_owned = await heartbeat
-                except PersistenceUnavailableError:
+                except (PersistenceUnavailableError, PersistenceIndeterminateError):
                     with suppress(asyncio.CancelledError):
                         await work
                     raise
@@ -111,7 +111,7 @@ class QueueWorker:
                     heartbeat_handled = True
                     try:
                         heartbeat_owned = await heartbeat
-                    except PersistenceUnavailableError:
+                    except (PersistenceUnavailableError, PersistenceIndeterminateError):
                         with suppress(asyncio.CancelledError):
                             await work
                         raise
@@ -141,7 +141,7 @@ class QueueWorker:
         while not self._stop.is_set():
             try:
                 processed = await self.process_one()
-            except PersistenceUnavailableError:
+            except (PersistenceUnavailableError, PersistenceIndeterminateError):
                 processed = False
             if not processed:
                 try:

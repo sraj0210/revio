@@ -16,7 +16,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
-from revio.adapters.persistence.sqlite.connection import FailureHook
+from revio.adapters.persistence.sqlite.connection import CoordinationHook, FailureHook
 from revio.adapters.persistence.sqlite.queue import INVALID_JOB_CLEANUP_BATCH_SIZE
 from revio.adapters.persistence.sqlite.store import SQLiteStore
 from revio.adapters.scm.github import GITHUB_PROVIDER_ID
@@ -31,7 +31,7 @@ from revio.config.queue import QueueSettings
 from revio.domain.capabilities import SCMCapabilities
 from revio.domain.identifiers import ChangeRequestTarget, InstallationRef
 from revio.domain.models import ChangeRequest, DiffCollection
-from revio.domain.queue import IngressDisposition, JobLease
+from revio.domain.queue import IngressDisposition, IngressReceipt, JobLease
 from revio.errors import PersistenceUnavailableError, QueueCapacityError, RetentionIntegrityError
 from revio.registries import ProviderRegistry, SCMAdapterBundle
 
@@ -44,6 +44,7 @@ class MigratedDatabase(Protocol):
         queue: QueueSettings | None = None,
         *,
         failure_hook: FailureHook | None = None,
+        coordination_hook: CoordinationHook | None = None,
     ) -> SQLiteStore: ...
 
 
@@ -87,6 +88,32 @@ class _Clock:
 
     def now(self) -> datetime:
         return self.current
+
+
+@dataclass
+class _BeginBarrier:
+    parties: int = 2
+    arrivals: int = 0
+    reached: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def __call__(self, stage: str) -> None:
+        if stage != "before_begin":
+            return
+        self.arrivals += 1
+        if self.arrivals == self.parties:
+            self.reached.set()
+        await self.release.wait()
+
+
+async def _release_begin_barrier(
+    barrier: _BeginBarrier, tasks: tuple[asyncio.Task[object], ...]
+) -> list[object]:
+    await asyncio.wait_for(barrier.reached.wait(), timeout=1)
+    assert barrier.arrivals == barrier.parties
+    assert all(not task.done() for task in tasks)
+    barrier.release.set()
+    return await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _processor(
@@ -278,7 +305,7 @@ async def test_commit_failure_rolls_back_and_never_claims_acceptance(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhooks/github", content=body, headers=headers)
     assert response.status_code == 503
-    assert response.json() == {"detail": "durable ingress unavailable"}
+    assert response.json() == {"status": "not_accepted"}
     assert (await store.status())["deliveries"] == 0
     assert (await store.status())["active_jobs"] == 0
 
@@ -396,21 +423,20 @@ async def test_worker_run_contains_malformed_backlog_and_processes_valid_job(
 async def test_semantic_duplicate_concurrency_uses_one_canonical_job(
     alembic_database: MigratedDatabase,
 ) -> None:
-    first = alembic_database.store()
-    second = alembic_database.store()
-    start = asyncio.Event()
-
-    async def contend(store: SQLiteStore, delivery: str, payload_hash: str):
-        await start.wait()
-        return await _persist(store, delivery, payload_hash)
+    barrier = _BeginBarrier()
+    first = alembic_database.store(coordination_hook=barrier)
+    second = alembic_database.store(coordination_hook=barrier)
 
     tasks = (
-        asyncio.create_task(contend(first, "semantic-a", "a" * 64)),
-        asyncio.create_task(contend(second, "semantic-b", "b" * 64)),
+        asyncio.create_task(_persist(first, "semantic-a", "a" * 64)),
+        asyncio.create_task(_persist(second, "semantic-b", "b" * 64)),
     )
-    await asyncio.sleep(0)
-    start.set()
-    receipts = await asyncio.gather(*tasks)
+    outcomes = await _release_begin_barrier(barrier, cast(tuple[asyncio.Task[object], ...], tasks))
+    receipts = cast(
+        list[IngressReceipt],
+        [outcome for outcome in outcomes if not isinstance(outcome, BaseException)],
+    )
+    assert len(receipts) == 2
     assert {receipt.disposition for receipt in receipts} == {IngressDisposition.ACCEPTED}
     assert receipts[0].job_id == receipts[1].job_id
     status = await first.status()
@@ -423,21 +449,15 @@ async def test_capacity_boundary_concurrency_never_exceeds_limit(
     alembic_database: MigratedDatabase,
 ) -> None:
     queue = QueueSettings(queue_max_active_jobs=1)
-    first = alembic_database.store(queue)
-    second = alembic_database.store(queue)
-    start = asyncio.Event()
-
-    async def contend(store: SQLiteStore, delivery: str, head: str):
-        await start.wait()
-        return await _persist(store, delivery, head[0] * 64, head=head)
+    barrier = _BeginBarrier()
+    first = alembic_database.store(queue, coordination_hook=barrier)
+    second = alembic_database.store(queue, coordination_hook=barrier)
 
     tasks = (
-        asyncio.create_task(contend(first, "capacity-a", "alpha")),
-        asyncio.create_task(contend(second, "capacity-b", "bravo")),
+        asyncio.create_task(_persist(first, "capacity-a", "a" * 64, head="alpha")),
+        asyncio.create_task(_persist(second, "capacity-b", "b" * 64, head="bravo")),
     )
-    await asyncio.sleep(0)
-    start.set()
-    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    outcomes = await _release_begin_barrier(barrier, cast(tuple[asyncio.Task[object], ...], tasks))
     assert sum(not isinstance(outcome, BaseException) for outcome in outcomes) == 1
     assert sum(isinstance(outcome, QueueCapacityError) for outcome in outcomes) == 1
     status = await first.status()
@@ -449,23 +469,20 @@ async def test_capacity_boundary_concurrency_never_exceeds_limit(
 async def test_lease_concurrency_has_one_owner_and_one_attempt(
     alembic_database: MigratedDatabase,
 ) -> None:
-    first = alembic_database.store()
-    second = alembic_database.store()
-    receipt = await _persist(first, "lease", "d" * 64)
+    setup = alembic_database.store()
+    receipt = await _persist(setup, "lease", "d" * 64)
+    barrier = _BeginBarrier()
+    first = alembic_database.store(coordination_hook=barrier)
+    second = alembic_database.store(coordination_hook=barrier)
     now = datetime.now(UTC)
-    start = asyncio.Event()
-
-    async def contend(store: SQLiteStore, worker: str) -> JobLease | None:
-        await start.wait()
-        return await store.lease_next(worker, now)
 
     tasks = (
-        asyncio.create_task(contend(first, "worker-a")),
-        asyncio.create_task(contend(second, "worker-b")),
+        asyncio.create_task(first.lease_next("worker-a", now)),
+        asyncio.create_task(second.lease_next("worker-b", now)),
     )
-    await asyncio.sleep(0)
-    start.set()
-    leases = await asyncio.gather(*tasks)
+    outcomes = await _release_begin_barrier(barrier, cast(tuple[asyncio.Task[object], ...], tasks))
+    assert not any(isinstance(outcome, BaseException) for outcome in outcomes)
+    leases = cast(list[JobLease | None], outcomes)
     assert sum(lease is not None for lease in leases) == 1
     async with first.connect() as connection:
         attempts = list(
@@ -474,6 +491,70 @@ async def test_lease_concurrency_has_one_owner_and_one_attempt(
             )
         )
     assert len(attempts) == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_duplicate_is_admitted_when_active_capacity_is_full(
+    alembic_database: MigratedDatabase,
+) -> None:
+    queue = QueueSettings(queue_max_active_jobs=1)
+    setup = alembic_database.store(queue)
+    canonical = await _persist(setup, "capacity-canonical", "c" * 64)
+    barrier = _BeginBarrier()
+    first = alembic_database.store(queue, coordination_hook=barrier)
+    second = alembic_database.store(queue, coordination_hook=barrier)
+    tasks = (
+        asyncio.create_task(_persist(first, "capacity-duplicate-a", "a" * 64)),
+        asyncio.create_task(_persist(second, "capacity-duplicate-b", "b" * 64)),
+    )
+    outcomes = await _release_begin_barrier(barrier, cast(tuple[asyncio.Task[object], ...], tasks))
+    assert all(not isinstance(outcome, BaseException) for outcome in outcomes)
+    receipts = cast(list[IngressReceipt], outcomes)
+    assert all(receipt.job_id == canonical.job_id for receipt in receipts)
+    status = await setup.status()
+    assert status["deliveries"] == 3
+    assert status["active_jobs"] == 1
+
+
+@pytest.mark.asyncio
+async def test_same_delivery_same_hash_concurrency_is_idempotent(
+    alembic_database: MigratedDatabase,
+) -> None:
+    barrier = _BeginBarrier()
+    first = alembic_database.store(coordination_hook=barrier)
+    second = alembic_database.store(coordination_hook=barrier)
+    tasks = (
+        asyncio.create_task(_persist(first, "same", "a" * 64)),
+        asyncio.create_task(_persist(second, "same", "a" * 64)),
+    )
+    outcomes = await _release_begin_barrier(barrier, cast(tuple[asyncio.Task[object], ...], tasks))
+    assert all(not isinstance(outcome, BaseException) for outcome in outcomes)
+    receipts = cast(list[IngressReceipt], outcomes)
+    dispositions = {receipt.disposition for receipt in receipts}
+    assert dispositions == {IngressDisposition.ACCEPTED, IngressDisposition.IDEMPOTENT}
+    assert len({receipt.job_id for receipt in receipts}) == 1
+    status = await first.status()
+    assert status["deliveries"] == status["active_jobs"] == 1
+
+
+@pytest.mark.asyncio
+async def test_same_delivery_different_hash_concurrency_reports_conflict(
+    alembic_database: MigratedDatabase,
+) -> None:
+    barrier = _BeginBarrier()
+    first = alembic_database.store(coordination_hook=barrier)
+    second = alembic_database.store(coordination_hook=barrier)
+    tasks = (
+        asyncio.create_task(_persist(first, "hash-conflict", "a" * 64)),
+        asyncio.create_task(_persist(second, "hash-conflict", "b" * 64)),
+    )
+    outcomes = await _release_begin_barrier(barrier, cast(tuple[asyncio.Task[object], ...], tasks))
+    assert all(not isinstance(outcome, BaseException) for outcome in outcomes)
+    receipts = cast(list[IngressReceipt], outcomes)
+    dispositions = {receipt.disposition for receipt in receipts}
+    assert dispositions == {IngressDisposition.ACCEPTED, IngressDisposition.CONFLICT}
+    status = await first.status()
+    assert status["deliveries"] == status["active_jobs"] == 1
 
 
 @pytest.mark.asyncio
@@ -703,6 +784,7 @@ async def test_shutdown_heartbeat_timeout_expiry_and_worker_recovery(
     )
     store = alembic_database.store(queue)
     receipt = await _persist(store, "shutdown", "6" * 64)
+    second_receipt = await _persist(store, "shutdown-second", "5" * 64, head="second")
     clock = _Clock(datetime.now(UTC))
     reader = _Reader(block=True)
     original_heartbeat = store.heartbeat
@@ -725,6 +807,7 @@ async def test_shutdown_heartbeat_timeout_expiry_and_worker_recovery(
         "old-worker",
         clock=clock,
     )
+    tasks_before_run = set(asyncio.all_tasks())
     running = asyncio.create_task(worker.run())
     await reader.started.wait()
     worker.request_stop()
@@ -735,6 +818,25 @@ async def test_shutdown_heartbeat_timeout_expiry_and_worker_recovery(
     assert heartbeat_calls == calls_after_exit
     old_job = await store.get_job(cast(str, receipt.job_id))
     assert old_job is not None and old_job.state == "running" and old_job.attempt_count == 1
+    second_job = await store.get_job(cast(str, second_receipt.job_id))
+    assert (
+        second_job is not None and second_job.state == "pending" and second_job.attempt_count == 0
+    )
+    async with store.connect() as connection:
+        second_attempts = list(
+            await connection.execute_fetchall(
+                "SELECT 1 FROM job_attempts WHERE job_id=?", (second_receipt.job_id,)
+            )
+        )
+    assert second_attempts == []
+    await asyncio.sleep(0)
+    current = asyncio.current_task()
+    leaked = [
+        task
+        for task in asyncio.all_tasks()
+        if task is not current and task not in tasks_before_run and not task.done()
+    ]
+    assert leaked == []
 
     monkeypatch.setattr(store, "heartbeat", original_heartbeat)
     clock.current += timedelta(seconds=11)
@@ -746,6 +848,7 @@ async def test_shutdown_heartbeat_timeout_expiry_and_worker_recovery(
         "new-worker",
         clock=clock,
     )
+    assert await new_worker.process_one()
     assert await new_worker.process_one()
     recovered = await store.get_job(cast(str, receipt.job_id))
     assert recovered is not None and recovered.state == "completed" and recovered.attempt_count == 2
@@ -760,6 +863,12 @@ async def test_shutdown_heartbeat_timeout_expiry_and_worker_recovery(
     assert [row["worker_id"] for row in attempts] == ["old-worker", "new-worker"]
     assert [row["outcome"] for row in attempts] == ["lease_expired", "completed"]
     assert all(row["finished_at"] is not None for row in attempts)
+    later_processed = await store.get_job(cast(str, second_receipt.job_id))
+    assert (
+        later_processed is not None
+        and later_processed.state == "superseded"
+        and later_processed.attempt_count == 1
+    )
 
 
 @pytest.mark.asyncio

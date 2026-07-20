@@ -33,6 +33,14 @@ class PersistenceUnavailableError(PersistenceError):
     """Persistence could not complete within its bounded availability budget."""
 
 
+class PersistenceNotCommittedError(PersistenceUnavailableError):
+    """A durable operation was confirmed not to have committed."""
+
+
+class PersistenceIndeterminateError(PersistenceError):
+    """A durable operation's commit disposition could not be established safely."""
+
+
 class PersistenceIntegrityError(PersistenceError):
     """Persistence reached a durable state that cannot be accepted safely."""
 

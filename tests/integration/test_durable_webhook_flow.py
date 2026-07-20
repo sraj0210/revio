@@ -109,7 +109,7 @@ async def test_durable_ingress_failure_is_sanitized_503_and_rolls_back(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhooks/github", content=body, headers=_headers(body))
     assert response.status_code == 503
-    assert response.json() == {"detail": "durable ingress unavailable"}
+    assert response.json() == {"status": "not_accepted"}
     assert "sensitive" not in response.text
     assert (await store.status())["deliveries"] == 0
     assert (await store.status())["active_jobs"] == 0
