@@ -1,6 +1,6 @@
 """Safe GitHub error classification."""
 
-from revio.errors import RevioError
+from revio.errors import ProviderTransientError, RevioError
 
 
 class GitHubError(RevioError):
@@ -35,7 +35,7 @@ class GitHubUnsupportedObjectError(GitHubError):
     pass
 
 
-class GitHubTransportError(GitHubError):
+class GitHubTransportError(GitHubError, ProviderTransientError):
     pass
 
 
@@ -47,13 +47,13 @@ class GitHubValidationError(GitHubError):
     pass
 
 
-class GitHubProviderUnavailableError(GitHubError):
+class GitHubProviderUnavailableError(GitHubError, ProviderTransientError):
     def __init__(self, retry_after_seconds: float | None = None) -> None:
         super().__init__("GitHub provider is temporarily unavailable")
         self.retry_after_seconds = retry_after_seconds
 
 
-class GitHubRateLimitedError(GitHubError):
+class GitHubRateLimitedError(GitHubError, ProviderTransientError):
     def __init__(
         self,
         *,

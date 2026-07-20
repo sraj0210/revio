@@ -1,5 +1,6 @@
 """Provider-neutral webhook event models."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,6 +20,7 @@ class ReviewEvent(BaseModel):
     change_request: ChangeRequestTarget | None = None
     event_head_sha: str | None = None
     event_base_sha: str | None = None
+    provider_updated_at: datetime | None = None
 
 
 class WebhookNormalizationResult(BaseModel):

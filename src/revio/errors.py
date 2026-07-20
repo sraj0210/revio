@@ -23,3 +23,31 @@ class UnknownProviderError(RegistryError):
 
 class UnknownModelAliasError(RegistryError):
     """Raised when an administrator-approved model alias is unknown."""
+
+
+class PersistenceError(RevioError):
+    """A persistence operation failed safely."""
+
+
+class PersistenceUnavailableError(PersistenceError):
+    """Persistence could not complete within its bounded availability budget."""
+
+
+class MigrationRequiredError(PersistenceError):
+    """The database schema is not at the required revision."""
+
+
+class QueueCapacityError(PersistenceError):
+    """The active durable queue is at its configured capacity."""
+
+
+class DeliveryIntegrityError(PersistenceError):
+    """A delivery identity was reused with different content."""
+
+
+class InvalidJobError(RevioError):
+    """A durable job cannot be decoded or processed safely."""
+
+
+class ProviderTransientError(RevioError):
+    """A provider read may be retried safely."""

@@ -18,6 +18,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
+  "aiosqlite>=0.20,<1",
   "alembic>=1.14,<2",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
@@ -69,3 +70,6 @@ default-groups = ["dev"]
 
 [project.scripts]
 revio-github-sandbox = "revio.cli.github_sandbox:main"
+revio-db = "revio.cli.database:main"
+revio-worker = "revio.worker.main:main"
+revio-queue-status = "revio.cli.queue_status:main"
