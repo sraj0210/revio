@@ -20,7 +20,10 @@ def test_supported_pull_request_actions_normalize(action: str) -> None:
     assert result.event is not None
     assert result.event.trigger == action
     assert result.event.delivery_identity == "github:delivery"
-    assert f":head:{action}" in result.event.semantic_identity
+    if action == "reopened":
+        assert result.event.semantic_identity.endswith(":reopened:delivery")
+    else:
+        assert result.event.semantic_identity.endswith(":head:head:review")
 
 
 @pytest.mark.parametrize("action", ["created", "deleted", "suspend", "unsuspend"])

@@ -1,0 +1,67 @@
+"""Phase 3 current-head validation; no diff or source retrieval."""
+
+from datetime import UTC, datetime, timedelta
+
+from revio.application.queue.retry import retry_delay
+from revio.config.queue import QueueSettings
+from revio.domain.queue import InstallationStatus, JobLease
+from revio.errors import ProviderTransientError
+from revio.ports.credentials import InstallationCredentialCachePort
+from revio.ports.persistence import QueueRepository
+from revio.registries import ProviderRegistry
+
+
+class QueueProcessor:
+    def __init__(
+        self,
+        repository: QueueRepository,
+        providers: ProviderRegistry,
+        token_cache: InstallationCredentialCachePort,
+        settings: QueueSettings,
+    ) -> None:
+        self._repository = repository
+        self._providers = providers
+        self._token_cache = token_cache
+        self._settings = settings
+
+    async def process(self, lease: JobLease) -> None:
+        now = datetime.now(UTC)
+        event = lease.job.event
+        installation_id = event.installation.external_id
+        state = await self._repository.installation_state(str(event.provider_id), installation_id)
+        if state is not None and state.state in {
+            InstallationStatus.SUSPENDED,
+            InstallationStatus.DELETED,
+        }:
+            await self._token_cache.invalidate(event.installation)
+            await self._repository.terminate(lease, "cancelled", f"installation_{state.state}", now)
+            return
+        if event.change_request is None or event.event_head_sha is None:
+            await self._repository.terminate(lease, "dead", "invalid_job", now)
+            return
+        try:
+            current = await self._providers.scm(event.provider_id).reader.get_change_request(
+                event.change_request
+            )
+        except ProviderTransientError as error:
+            retry_after = getattr(error, "retry_after_seconds", None)
+            delay = retry_delay(lease.attempt_number, self._settings, retry_after=retry_after)
+            await self._repository.retry(
+                lease,
+                available_at=now + timedelta(seconds=delay),
+                error_class=type(error).__name__,
+                error_message="provider read temporarily unavailable",
+                now=now,
+            )
+            return
+        except Exception:
+            await self._repository.terminate(lease, "dead", "provider_read_failed", now)
+            return
+        if current.state in {"closed", "merged"}:
+            await self._repository.terminate(lease, "cancelled", "change_request_closed", now)
+        elif current.head_sha != event.event_head_sha:
+            await self._repository.terminate(lease, "superseded", "stale_head", now)
+        else:
+            await self._repository.complete(
+                lease, head_sha=current.head_sha, base_sha=current.base_sha, now=now
+            )
