@@ -161,6 +161,29 @@ def test_pagination_links_are_origin_confined(rsa_private_key_pem: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "url",
+    [
+        "https://user@api.github.com/next",
+        "https://api.github.com:444/next",
+        "https://api.github.com./next",
+        "https://[broken/next",
+        "not a url",
+    ],
+)
+def test_pagination_rejects_userinfo_alternate_origins_and_malformed_urls(
+    rsa_private_key_pem: str, url: str
+) -> None:
+    client, http = client_for(
+        rsa_private_key_pem, httpx.MockTransport(lambda _: httpx.Response(200))
+    )
+    with pytest.raises(GitHubResponseError):
+        client.pagination_url(url)
+    import asyncio
+
+    asyncio.run(http.aclose())
+
+
+@pytest.mark.parametrize(
     ("status", "headers", "body", "error_type"),
     [
         (401, {}, None, GitHubAuthenticationError),
@@ -210,6 +233,26 @@ async def test_transport_timeout_is_typed(rsa_private_key_pem: str) -> None:
         with pytest.raises(GitHubTransportError) as caught:
             await client.get(9, "/resource")
     assert "unsafe-provider-detail" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "timeout_type", [httpx.ConnectTimeout, httpx.WriteTimeout, httpx.PoolTimeout]
+)
+async def test_all_transport_timeout_phases_are_safely_normalized(
+    rsa_private_key_pem: str, timeout_type: type[httpx.TimeoutException]
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return token_response()
+        raise timeout_type("SENTINEL-TIMEOUT-DETAIL", request=request)
+
+    client, http = client_for(rsa_private_key_pem, httpx.MockTransport(handler))
+    async with http:
+        with pytest.raises(GitHubTransportError) as caught:
+            await client.get(9, "/resource?credential=SENTINEL-QUERY")
+    rendered = f"{caught.value!s} {caught.value!r} {caught.value.__context__}"
+    assert "SENTINEL" not in rendered
 
 
 @pytest.mark.asyncio

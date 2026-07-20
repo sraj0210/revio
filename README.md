@@ -1,6 +1,6 @@
 # Revio
 
-Revio is a provider-neutral, AI-powered code-review platform. The project is in its engineering-foundation phase; provider integrations and review behavior are not implemented yet.
+Revio is a provider-neutral, AI-powered code-review platform. Phase 2 includes a read-only GitHub sandbox integration, but it is not production-ready: durable webhook processing, AI review execution, and GitHub write operations remain unimplemented.
 
 The approved architecture and phased roadmap are documented in [the implementation plan](docs/architecture/implementation-plan.md).
 

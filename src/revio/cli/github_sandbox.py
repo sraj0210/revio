@@ -80,6 +80,9 @@ async def run_validation(args: argparse.Namespace, settings: GitHubSettings) -> 
                     "path": item.new_path or item.old_path,
                     "status": item.status,
                     "patch_state": item.patch_state,
+                    "additions": item.additions,
+                    "deletions": item.deletions,
+                    "changes": item.changes,
                 }
                 for item in files.items
             ],

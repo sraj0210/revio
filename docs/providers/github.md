@@ -16,7 +16,7 @@ Application bootstrap constructs and registers the read-only adapter only when `
 
 ## Partial data
 
-Changed-file and tree collections carry a completeness value: `complete`, `provider_truncated`, `service_page_limit`, or `service_item_limit`. Each changed file separately reports `complete`, `missing`, `malformed`, `provider_truncated`, or `binary_or_no_textual_patch` patch state. Non-complete values must never be treated as a full provider result.
+Changed-file and tree collections carry a completeness value: `complete`, `provider_truncated`, `service_page_limit`, or `service_item_limit`. Exact duplicate changed-file entries are deduplicated, conflicting duplicates fail safely, and completeness uses the unique validated file count. Each changed file separately reports `complete`, `missing`, `malformed`, `provider_truncated`, or `no_textual_patch_unknown_reason` patch state. GitHub's changed-files response does not authoritatively distinguish binary files from other reasons a textual patch is absent, so Revio does not infer either binary content or provider truncation from change counts alone. Non-complete and non-`complete` patch values must never be treated as a full textual provider result.
 
 ## Safety warning
 

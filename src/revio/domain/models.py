@@ -22,12 +22,15 @@ class DiffFile(BaseModel):
     new_path: str | None = None
     status: Literal["added", "modified", "deleted", "renamed", "copied"]
     lines: tuple[DiffLine, ...] = ()
+    additions: int | None = Field(default=None, ge=0)
+    deletions: int | None = Field(default=None, ge=0)
+    changes: int | None = Field(default=None, ge=0)
     patch_state: Literal[
         "complete",
         "missing",
         "malformed",
         "provider_truncated",
-        "binary_or_no_textual_patch",
+        "no_textual_patch_unknown_reason",
     ] = "complete"
 
 

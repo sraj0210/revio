@@ -144,6 +144,29 @@ async def test_different_installations_refresh_concurrently() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancelled_refresh_does_not_poison_cache_or_lock() -> None:
+    clock = FakeClock()
+    cache = InstallationTokenCache(timedelta(seconds=60), timedelta(seconds=10), clock)
+    started = asyncio.Event()
+
+    async def blocked(_: int) -> InstallationToken:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    task = asyncio.create_task(cache.get(7, blocked))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    async def successful(_: int) -> InstallationToken:
+        return InstallationToken(SecretStr("recovered"), clock.now() + timedelta(hours=1))
+
+    assert (await cache.get(7, successful)).get_secret_value() == "recovered"
+
+
+@pytest.mark.asyncio
 async def test_expired_refresh_token_is_never_returned() -> None:
     clock = FakeClock()
     cache = InstallationTokenCache(timedelta(seconds=60), timedelta(seconds=10), clock)

@@ -77,6 +77,29 @@ async def test_pagination_loop_is_rejected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reordered_query_parameters_are_the_same_page_identity() -> None:
+    client = PagingClient(
+        [
+            httpx.Response(
+                200,
+                json=[1],
+                headers={"Link": '<https://api.github.com/items?b=two&a=%31>; rel="next"'},
+            )
+        ]
+    )
+    with pytest.raises(GitHubResponseError, match="loop"):
+        await collect_pages(
+            cast(GitHubClient, client),
+            1,
+            "/items?a=1&b=two",
+            params=None,
+            parse=parse,
+            max_pages=3,
+            max_items=10,
+        )
+
+
+@pytest.mark.asyncio
 async def test_malformed_pagination_link_is_rejected() -> None:
     client = PagingClient(
         [httpx.Response(200, json=[1], headers={"Link": '<not a url>; rel="next"'})]

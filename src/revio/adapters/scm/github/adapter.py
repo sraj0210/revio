@@ -118,12 +118,22 @@ class GitHubReadAdapter:
 
     async def get_diff(self, target: ChangeRequestTarget) -> DiffCollection:
         pull_request, installation, root = await self._pull_request_dto(target)
+        seen: dict[tuple[str, str, str | None], GitHubFileDTO] = {}
 
         def parse(response: httpx.Response) -> list[GitHubFileDTO]:
             parsed = _validated_file_list(response)
             if parsed is None:
                 raise GitHubResponseError("invalid GitHub changed-files response") from None
-            return parsed
+            unique: list[GitHubFileDTO] = []
+            for item in parsed:
+                identity = self._file_identity(item)
+                previous = seen.get(identity)
+                if previous is None:
+                    seen[identity] = item
+                    unique.append(item)
+                elif previous != item:
+                    raise GitHubResponseError("conflicting duplicate GitHub changed file")
+            return unique
 
         items, completeness = await collect_pages(
             self._client,
@@ -134,15 +144,26 @@ class GitHubReadAdapter:
             max_pages=self._max_pages,
             max_items=self._max_items,
         )
-        if (
-            completeness.is_complete
-            and pull_request.changed_files is not None
-            and len(items) < pull_request.changed_files
-        ):
-            completeness = CollectionCompleteness(status="provider_truncated")
+        if completeness.is_complete and pull_request.changed_files is not None:
+            if len(items) < pull_request.changed_files:
+                completeness = CollectionCompleteness(status="provider_truncated")
+            elif len(items) > pull_request.changed_files:
+                raise GitHubResponseError("inconsistent GitHub changed-file count")
         return DiffCollection(
             items=tuple(self._map_file(item) for item in items), completeness=completeness
         )
+
+    @staticmethod
+    def _normalized_status(item: GitHubFileDTO) -> str:
+        return {"removed": "deleted", "changed": "modified", "unchanged": "modified"}.get(
+            item.status, item.status
+        )
+
+    @classmethod
+    def _file_identity(cls, item: GitHubFileDTO) -> tuple[str, str, str | None]:
+        status = cls._normalized_status(item)
+        previous = item.previous_filename if status in {"renamed", "copied"} else None
+        return status, item.filename, previous
 
     @staticmethod
     def _map_file(item: GitHubFileDTO) -> DiffFile:
@@ -167,15 +188,14 @@ class GitHubReadAdapter:
 
         lines: list[DiffLine] = []
         patch_state: Literal[
-            "complete", "missing", "malformed", "provider_truncated", "binary_or_no_textual_patch"
+            "complete",
+            "missing",
+            "malformed",
+            "provider_truncated",
+            "no_textual_patch_unknown_reason",
         ] = "complete"
         if item.patch is None:
-            if item.changes == 0:
-                patch_state = "binary_or_no_textual_patch"
-            elif item.changes is not None:
-                patch_state = "provider_truncated"
-            else:
-                patch_state = "missing"
+            patch_state = "no_textual_patch_unknown_reason"
         else:
             try:
                 source = f"a/{old_path}" if old_path is not None else "/dev/null"
@@ -218,6 +238,9 @@ class GitHubReadAdapter:
             new_path=new_path,
             status=status,
             lines=tuple(lines),
+            additions=item.additions,
+            deletions=item.deletions,
+            changes=item.changes,
             patch_state=patch_state,
         )
 
@@ -275,8 +298,19 @@ class GitHubReadAdapter:
             raise GitHubUnsupportedObjectError("unsupported GitHub file encoding")
         if dto.size is not None and dto.size > self._max_file_bytes:
             raise GitHubResponseError("GitHub file exceeds configured limit")
+        maximum_encoded_length = 4 * ((self._max_file_bytes + 2) // 3)
+        maximum_content_length = maximum_encoded_length * 2 + 4
+        encoded_characters: list[str] = []
+        for index, character in enumerate(dto.content):
+            if index >= maximum_content_length:
+                raise GitHubResponseError("GitHub file exceeds configured limit")
+            if character in " \t\r\n":
+                continue
+            if len(encoded_characters) >= maximum_encoded_length:
+                raise GitHubResponseError("GitHub file exceeds configured limit")
+            encoded_characters.append(character)
         try:
-            raw = base64.b64decode("".join(dto.content.split()), validate=True)
+            raw = base64.b64decode("".join(encoded_characters), validate=True)
         except (ValueError, binascii.Error):
             raise GitHubResponseError("invalid GitHub file content") from None
         if len(raw) > self._max_file_bytes:

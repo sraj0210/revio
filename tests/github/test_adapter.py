@@ -103,36 +103,54 @@ async def test_current_pr_and_diff_line_mapping(github_target: ChangeRequestTarg
 @pytest.mark.parametrize(
     ("payload", "status", "old_path", "new_path", "patch_state"),
     [
-        ({"filename": "a", "status": "added"}, "added", None, "a", "missing"),
-        ({"filename": "a", "status": "removed"}, "deleted", "a", None, "missing"),
-        ({"filename": "a", "status": "modified"}, "modified", "a", "a", "missing"),
+        (
+            {"filename": "a", "status": "added"},
+            "added",
+            None,
+            "a",
+            "no_textual_patch_unknown_reason",
+        ),
+        (
+            {"filename": "a", "status": "removed"},
+            "deleted",
+            "a",
+            None,
+            "no_textual_patch_unknown_reason",
+        ),
+        (
+            {"filename": "a", "status": "modified"},
+            "modified",
+            "a",
+            "a",
+            "no_textual_patch_unknown_reason",
+        ),
         (
             {"filename": "b", "previous_filename": "a", "status": "renamed"},
             "renamed",
             "a",
             "b",
-            "missing",
+            "no_textual_patch_unknown_reason",
         ),
         (
             {"filename": "b", "previous_filename": "a", "status": "copied"},
             "copied",
             "a",
             "b",
-            "missing",
+            "no_textual_patch_unknown_reason",
         ),
         (
             {"filename": "image", "status": "modified", "changes": 0},
             "modified",
             "image",
             "image",
-            "binary_or_no_textual_patch",
+            "no_textual_patch_unknown_reason",
         ),
         (
             {"filename": "large", "status": "modified", "changes": 20},
             "modified",
             "large",
             "large",
-            "provider_truncated",
+            "no_textual_patch_unknown_reason",
         ),
     ],
 )
@@ -166,6 +184,33 @@ def test_malformed_patch_is_explicit() -> None:
     assert mapped.lines == ()
 
 
+def test_valid_patch_is_complete_and_preserves_change_counts() -> None:
+    from revio.adapters.scm.github.dto.api import GitHubFileDTO
+
+    mapped = GitHubReadAdapter._map_file(  # pyright: ignore[reportPrivateUsage]
+        GitHubFileDTO(
+            filename="a",
+            status="modified",
+            additions=1,
+            deletions=1,
+            changes=2,
+            patch="@@ -1 +1 @@\n-old\n+new",
+        )
+    )
+    assert mapped.patch_state == "complete"
+    assert (mapped.additions, mapped.deletions, mapped.changes) == (1, 1, 2)
+
+
+def test_provider_truncated_patch_state_requires_explicit_authoritative_evidence() -> None:
+    from revio.domain.models import DiffFile
+
+    # The current GitHub files payload has no authoritative per-patch truncation field.
+    explicit = DiffFile(
+        new_path="a", status="modified", patch_state="provider_truncated", changes=3
+    )
+    assert explicit.patch_state == "provider_truncated"
+
+
 @pytest.mark.asyncio
 async def test_diff_provider_and_service_completeness(github_target: ChangeRequestTarget) -> None:
     provider = FakeClient([pr_response(changed_files=2), httpx.Response(200, json=[])])
@@ -186,6 +231,68 @@ async def test_diff_provider_and_service_completeness(github_target: ChangeReque
     )
     result = await GitHubReadAdapter(cast(GitHubClient, pages), max_pages=1).get_diff(github_target)
     assert result.completeness.status == "service_page_limit"
+
+
+@pytest.mark.asyncio
+async def test_identical_duplicate_on_later_page_is_deduplicated_and_incomplete(
+    github_target: ChangeRequestTarget,
+) -> None:
+    item = {"filename": "a", "status": "modified", "changes": 1}
+    link = '<https://api.github.com/next>; rel="next"'
+    fake = FakeClient(
+        [
+            pr_response(changed_files=2),
+            httpx.Response(200, json=[item], headers={"Link": link}),
+            httpx.Response(200, json=[item]),
+        ]
+    )
+    result = await GitHubReadAdapter(cast(GitHubClient, fake)).get_diff(github_target)
+    assert len(result.items) == 1
+    assert result.completeness.status == "provider_truncated"
+
+
+@pytest.mark.asyncio
+async def test_conflicting_duplicate_on_later_page_fails_safely(
+    github_target: ChangeRequestTarget,
+) -> None:
+    link = '<https://api.github.com/next>; rel="next"'
+    fake = FakeClient(
+        [
+            pr_response(changed_files=1),
+            httpx.Response(
+                200,
+                json=[{"filename": "a", "status": "modified", "changes": 1}],
+                headers={"Link": link},
+            ),
+            httpx.Response(
+                200,
+                json=[{"filename": "a", "status": "modified", "changes": 2}],
+            ),
+        ]
+    )
+    with pytest.raises(GitHubResponseError, match="conflicting duplicate"):
+        await GitHubReadAdapter(cast(GitHubClient, fake)).get_diff(github_target)
+
+
+@pytest.mark.asyncio
+async def test_unique_changed_file_count_controls_completeness(
+    github_target: ChangeRequestTarget,
+) -> None:
+    files = [
+        {"filename": "a", "status": "added"},
+        {"filename": "b", "status": "removed"},
+    ]
+    complete = FakeClient([pr_response(changed_files=2), httpx.Response(200, json=files)])
+    result = await GitHubReadAdapter(cast(GitHubClient, complete)).get_diff(github_target)
+    assert result.completeness.status == "complete"
+
+    incomplete = FakeClient([pr_response(changed_files=3), httpx.Response(200, json=files)])
+    result = await GitHubReadAdapter(cast(GitHubClient, incomplete)).get_diff(github_target)
+    assert result.completeness.status == "provider_truncated"
+
+    inconsistent = FakeClient([pr_response(changed_files=1), httpx.Response(200, json=files)])
+    with pytest.raises(GitHubResponseError, match="inconsistent"):
+        await GitHubReadAdapter(cast(GitHubClient, inconsistent)).get_diff(github_target)
 
 
 @pytest.mark.asyncio
@@ -252,6 +359,27 @@ async def test_file_strict_base64_and_size_limits(
         ]
     )
     with pytest.raises(GitHubResponseError):
+        await GitHubReadAdapter(cast(GitHubClient, fake), max_file_bytes=3).get_file(
+            github_target, "a", "head"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_size", [None, 1])
+async def test_oversized_base64_is_rejected_before_decode_when_size_is_missing_or_false(
+    github_target: ChangeRequestTarget, provider_size: int | None
+) -> None:
+    content = base64.b64encode(b"oversized").decode()
+    payload: dict[str, object] = {
+        "type": "file",
+        "content": f" {content[:4]}\n{content[4:]}",
+        "encoding": "base64",
+        "sha": "sha",
+    }
+    if provider_size is not None:
+        payload["size"] = provider_size
+    fake = FakeClient([httpx.Response(200), commit_response(), httpx.Response(200, json=payload)])
+    with pytest.raises(GitHubResponseError, match="exceeds"):
         await GitHubReadAdapter(cast(GitHubClient, fake), max_file_bytes=3).get_file(
             github_target, "a", "head"
         )

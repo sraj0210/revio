@@ -56,12 +56,14 @@ class GitHubClient:
             candidate = httpx.URL(value)
         except httpx.InvalidURL:
             raise GitHubResponseError("invalid GitHub pagination link") from None
-        if _origin(candidate) != _origin(self._api_url):
+        if candidate.userinfo or _origin(candidate) != _origin(self._api_url):
             raise GitHubResponseError("foreign GitHub pagination origin")
         return str(candidate.copy_with(scheme=None, host=None, port=None))
 
     async def _refresh(self, installation_id: int) -> InstallationToken:
         path = self.relative_url(f"/app/installations/{installation_id}/access_tokens")
+        failure: str | None = None
+        response: httpx.Response | None = None
         try:
             response = await self._http.post(
                 path,
@@ -69,9 +71,12 @@ class GitHubClient:
                 follow_redirects=False,
             )
         except httpx.TimeoutException:
-            raise GitHubTransportError("GitHub token request timed out") from None
+            failure = "GitHub token request timed out"
         except httpx.HTTPError:
-            raise GitHubTransportError("GitHub token request failed") from None
+            failure = "GitHub token request failed"
+        if failure is not None:
+            raise GitHubTransportError(failure)
+        assert response is not None
         self.raise_for_response(response)
         dto = self._parse_token(response)
         if dto is None:
@@ -93,6 +98,8 @@ class GitHubClient:
             token = await self._cache.get(installation_id, self._refresh)
             redirects = 0
             while True:
+                failure = None
+                response = None
                 try:
                     response = await self._http.get(
                         current_path,
@@ -101,9 +108,12 @@ class GitHubClient:
                         follow_redirects=False,
                     )
                 except httpx.TimeoutException:
-                    raise GitHubTransportError("GitHub read request timed out") from None
+                    failure = "GitHub read request timed out"
                 except httpx.HTTPError:
-                    raise GitHubTransportError("GitHub read request failed") from None
+                    failure = "GitHub read request failed"
+                if failure is not None:
+                    raise GitHubTransportError(failure)
+                assert response is not None
                 if response.status_code not in {301, 302, 307, 308}:
                     break
                 location = response.headers.get("Location")
