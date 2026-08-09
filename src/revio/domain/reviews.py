@@ -44,6 +44,7 @@ class PartialReason(StrEnum):
     INPUT_INCOMPLETE = "input_incomplete"
     INPUT_TRUNCATED = "input_truncated"
     PROVIDER_REFUSAL = "provider_refusal"
+    PROVIDER_OUTPUT_TRUNCATED = "provider_output_truncated"
     OUTPUT_INVALID = "output_invalid"
     REPAIR_FAILED = "repair_failed"
     PROVIDER_CALL_AMBIGUOUS = "provider_call_ambiguous"
@@ -88,6 +89,7 @@ class ProviderCallIdentity(BaseModel):
     model_profile_version: str = Field(min_length=1, max_length=64)
     prompt_version: str = Field(min_length=1, max_length=64)
     schema_version: str = Field(min_length=1, max_length=64)
+    estimated_input_tokens: int = Field(default=0, ge=0)
 
 
 class ProviderCallRecord(BaseModel):

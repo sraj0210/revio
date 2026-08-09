@@ -13,8 +13,8 @@ from revio.config.review import ReviewSettings
 from revio.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewRequest
 from revio.errors import (
     ProviderCallAmbiguousError,
+    ProviderCallObservedTerminalError,
     ProviderCallSafeRetryError,
-    ProviderCallTerminalError,
     ProviderTransientError,
 )
 
@@ -212,7 +212,7 @@ async def test_refusal_and_max_tokens_are_terminal_generation_outcomes(
         http=http,
     )
     payload = await adapter.preflight(_request(change_request))
-    with pytest.raises(ProviderCallTerminalError):
+    with pytest.raises(ProviderCallObservedTerminalError):
         await adapter.generate_preflighted(payload)
     await http.aclose()
 

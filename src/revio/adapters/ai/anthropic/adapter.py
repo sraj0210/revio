@@ -15,6 +15,7 @@ from revio.errors import (
     IncompleteReviewInputError,
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
+    ProviderCallObservedTerminalError,
     ProviderCallRejectedError,
     ProviderCallSafeRetryError,
     ProviderCallTerminalError,
@@ -231,7 +232,11 @@ class AnthropicReviewAdapter:
         return response
 
     async def _count(self, payload: dict[str, Any]) -> int:
-        count_payload = {key: value for key, value in payload.items() if key != "max_tokens"}
+        count_payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"max_tokens", "_revio_estimated_input_tokens"}
+        }
         response = await self._post_count(count_payload)
         try:
             count = cast(dict[str, Any], response.json())["input_tokens"]
@@ -246,10 +251,13 @@ class AnthropicReviewAdapter:
         estimated = await self._count(payload)
         if estimated > self._review_settings.admission_token_ceiling:
             raise IncompleteReviewInputError("review input exceeds admission ceiling")
-        return payload
+        return {**payload, "_revio_estimated_input_tokens": estimated}
 
     async def generate_preflighted(self, payload: dict[str, Any]) -> ReviewResult:
-        response = await self._post_messages(payload)
+        request_payload = {
+            key: value for key, value in payload.items() if key != "_revio_estimated_input_tokens"
+        }
+        response = await self._post_messages(request_payload)
         try:
             body = cast(dict[str, Any], response.json())
             raw_usage = cast(dict[str, Any], body["usage"])
@@ -261,13 +269,21 @@ class AnthropicReviewAdapter:
             )
             stop_reason = body.get("stop_reason")
             if stop_reason in {"refusal", "max_tokens"}:
-                raise ProviderCallTerminalError(f"Anthropic stopped with {stop_reason}")
+                raise ProviderCallObservedTerminalError(
+                    f"Anthropic stopped with {stop_reason}",
+                    usage=usage,
+                    reason=str(stop_reason),
+                )
             blocks = cast(list[dict[str, Any]], body["content"])
             texts = [block["text"] for block in blocks if block.get("type") == "text"]
             if len(texts) != 1:
                 raise ValueError
             parsed = _ReviewDTO.model_validate_json(texts[0])
-        except (ProviderCallRejectedError, ProviderCallTerminalError):
+        except (
+            ProviderCallRejectedError,
+            ProviderCallTerminalError,
+            ProviderCallObservedTerminalError,
+        ):
             raise
         except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             observed_usage = locals().get("usage")
@@ -299,4 +315,5 @@ class AnthropicReviewAdapter:
         estimated = await self._count(repaired)
         if estimated > self._review_settings.admission_token_ceiling:
             raise IncompleteReviewInputError("repair exceeds admission ceiling")
+        repaired["_revio_estimated_input_tokens"] = estimated
         return repaired

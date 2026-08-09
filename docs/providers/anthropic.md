@@ -16,3 +16,8 @@ preflight rejection. Messages connection failure before acceptance and explicit 
 may use a new durable ProviderCall ordinal; timeout, read-loss, and 5xx ambiguity never does.
 Refusal, `max_tokens`, and terminal 4xx responses become deterministic neutral artifacts and never
 escape the worker. Repair has an independent ordinal sequence and the same no-retransmission rule.
+
+A trustworthy HTTP 200 refusal or `max_tokens` response is not `known_rejected`: Revio durably
+records `response_observed` with exact usage, persists a service-owned partial artifact, and then
+completes that same ProviderCall. Its preflight token estimate is stored separately on the immutable
+ProviderCall identity as admission metadata; it is never counted as billed usage.

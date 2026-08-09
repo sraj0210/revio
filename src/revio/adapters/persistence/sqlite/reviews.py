@@ -94,7 +94,10 @@ class SQLiteReviewRepository:
                 ReviewRunState.ARTIFACT_DURABLE,
                 ReviewRunState.CHECK_RUN_INDETERMINATE,
             },
-            ReviewRunState.GENERATION_ATTEMPTED: {ReviewRunState.ARTIFACT_DURABLE},
+            ReviewRunState.GENERATION_ATTEMPTED: {
+                ReviewRunState.ARTIFACT_DURABLE,
+                ReviewRunState.CHECK_RUN_INDETERMINATE,
+            },
             ReviewRunState.ARTIFACT_DURABLE: {
                 ReviewRunState.PUBLISHING,
                 ReviewRunState.COMPLETED,
@@ -105,6 +108,7 @@ class SQLiteReviewRepository:
                 ReviewRunState.PARTIAL,
                 ReviewRunState.SUPERSEDED,
                 ReviewRunState.PUBLICATION_INDETERMINATE,
+                ReviewRunState.CHECK_RUN_INDETERMINATE,
             },
         }
         if target not in allowed.get(expected, set()):
@@ -129,8 +133,9 @@ class SQLiteReviewRepository:
             await connection.execute(
                 "INSERT INTO provider_calls "
                 "(id, review_run_id, call_kind, call_ordinal, provider_id, "
-                "model_profile_id, model_profile_version, prompt_version, schema_version, state, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?) "
+                "model_profile_id, model_profile_version, prompt_version, schema_version, "
+                "estimated_input_tokens, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?) "
                 "ON CONFLICT(review_run_id, call_kind, call_ordinal) DO NOTHING",
                 (
                     identity.id,
@@ -142,6 +147,7 @@ class SQLiteReviewRepository:
                     identity.model_profile_version,
                     identity.prompt_version,
                     identity.schema_version,
+                    identity.estimated_input_tokens,
                     stamp,
                     stamp,
                 ),
@@ -171,6 +177,7 @@ class SQLiteReviewRepository:
             model_profile_version=row["model_profile_version"],
             prompt_version=row["prompt_version"],
             schema_version=row["schema_version"],
+            estimated_input_tokens=row["estimated_input_tokens"],
         )
         created = datetime_value(row["created_at"])
         updated = datetime_value(row["updated_at"])

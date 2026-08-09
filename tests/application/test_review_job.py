@@ -21,8 +21,12 @@ from revio.domain.models import (
     ReviewRequest,
     ReviewResult,
 )
-from revio.domain.reviews import ReconciliationResult, ReviewStatusDetails
-from revio.errors import ProviderWriteAmbiguousError, ProviderWriteRejectedError
+from revio.domain.reviews import ReconciliationResult, ReviewRunState, ReviewStatusDetails
+from revio.errors import (
+    ProviderAnchorRejectedError,
+    ProviderWriteAmbiguousError,
+    ProviderWriteRejectedError,
+)
 from tests.conftest import AlembicDatabase
 
 
@@ -86,14 +90,20 @@ class RecordingWriter:
         ambiguous_publish: bool = False,
         reject_first_publish: bool = False,
         ambiguous_check: bool = False,
+        terminal_patch_applied: bool | None = None,
+        generic_rejection: bool = False,
     ) -> None:
         self.ambiguous_publish = ambiguous_publish
         self.reject_first_publish = reject_first_publish
         self.ambiguous_check = ambiguous_check
+        self.terminal_patch_applied = terminal_patch_applied
+        self.generic_rejection = generic_rejection
         self.check_id: str | None = None
         self.publish_calls = 0
         self.published_findings: list[tuple[Finding, ...]] = []
         self.check_statuses: list[str] = []
+        self.remote_check: dict[str, object] = {}
+        self.review_id: str | None = None
 
     async def reconcile_check_run(
         self,
@@ -119,6 +129,11 @@ class RecordingWriter:
         if self.ambiguous_check:
             raise ProviderWriteAmbiguousError("Check Run response lost")
         self.check_id = "check-1"
+        self.remote_check = {
+            "status": "queued",
+            "conclusion": None,
+            "output": {"summary": details.summary},
+        }
         return self.check_id
 
     async def update_check_run(
@@ -128,21 +143,33 @@ class RecordingWriter:
         details: ReviewStatusDetails,
     ) -> None:
         self.check_statuses.append(details.status)
+        desired: dict[str, object] = {
+            "status": details.status,
+            "conclusion": details.conclusion,
+            "output": {"summary": details.summary},
+        }
+        if details.status == "completed" and self.terminal_patch_applied is not None:
+            if self.terminal_patch_applied:
+                self.remote_check = desired
+            raise ProviderWriteAmbiguousError("terminal Check Run PATCH response lost")
+        self.remote_check = desired
         return None
 
     async def get_check_run(
         self, target: ChangeRequestTarget, provider_id: str
     ) -> dict[str, object]:
-        return {}
+        return dict(self.remote_check)
 
     async def reconcile_review(
         self, target: ChangeRequestTarget, *, marker: str
     ) -> ReconciliationResult:
+        ids = (self.review_id,) if self.review_id is not None else ()
         return ReconciliationResult(
-            match_count=0,
+            match_count=len(ids),
             collection_complete=True,
             pages_inspected=1,
-            items_inspected=0,
+            items_inspected=len(ids),
+            provider_ids=ids,
         )
 
     def validate_inline_findings(
@@ -162,10 +189,13 @@ class RecordingWriter:
         self.publish_calls += 1
         self.published_findings.append(findings)
         if self.reject_first_publish and self.publish_calls == 1:
-            raise ProviderWriteRejectedError("anchor rejected")
+            raise ProviderAnchorRejectedError("anchor rejected")
+        if self.generic_rejection:
+            raise ProviderWriteRejectedError("generic validation rejection")
         if self.ambiguous_publish:
             raise ProviderWriteAmbiguousError("response lost")
-        return "review-1"
+        self.review_id = "review-1"
+        return self.review_id
 
 
 async def _lease(store: SQLiteStore):
@@ -348,3 +378,100 @@ async def test_only_known_rejected_anchor_uses_summary_fallback(
     assert writer.check_statuses == ["queued", "in_progress", "completed"]
     run = await store.reviews.get_run(stable_id("review-run", lease.job.id))
     assert run is not None and run.state == "partial"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("applied", "expected"),
+    [(True, "completed"), (False, "check_run_indeterminate")],
+)
+async def test_terminal_check_patch_must_be_confirmed_before_review_run_completion(
+    alembic_database: AlembicDatabase, applied: bool, expected: str
+) -> None:
+    store = alembic_database.store()
+    lease, current = await _lease(store)
+    reviewer = SuccessfulReviewer()
+    writer = RecordingWriter(terminal_patch_applied=applied)
+    settings = _settings()
+    executor = ReviewJobExecutor(
+        store.reviews,
+        RaceReader(current.target, race=False),
+        ReviewGenerationService(store.reviews, reviewer, settings),
+        anthropic_model_profile(),
+        settings,
+        writer=writer,
+        marker_key=b"test-marker-key-with-sufficient-entropy",
+    )
+    outcome = await executor.execute(lease, current, now=datetime(2026, 1, 1, tzinfo=UTC))
+    assert outcome == expected and writer.publish_calls == 1
+    run = await store.reviews.get_run(stable_id("review-run", lease.job.id))
+    assert run is not None and run.state == expected
+
+
+@pytest.mark.asyncio
+async def test_generic_validation_rejection_never_authorizes_fallback_post(
+    alembic_database: AlembicDatabase,
+) -> None:
+    store = alembic_database.store()
+    lease, current = await _lease(store)
+    writer = RecordingWriter(generic_rejection=True)
+    settings = _settings()
+    executor = ReviewJobExecutor(
+        store.reviews,
+        RaceReader(current.target, race=False),
+        ReviewGenerationService(store.reviews, SuccessfulReviewer(), settings),
+        anthropic_model_profile(),
+        settings,
+        writer=writer,
+        marker_key=b"test-marker-key-with-sufficient-entropy",
+    )
+    assert (
+        await executor.execute(lease, current, now=datetime(2026, 1, 1, tzinfo=UTC))
+        == "publication_indeterminate"
+    )
+    assert writer.publish_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_publishing_restart_never_regresses_completed_check_or_reposts_review(
+    alembic_database: AlembicDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = alembic_database.store()
+    lease, current = await _lease(store)
+    reviewer = SuccessfulReviewer()
+    writer = RecordingWriter()
+    settings = _settings()
+    executor = ReviewJobExecutor(
+        store.reviews,
+        RaceReader(current.target, race=False),
+        ReviewGenerationService(store.reviews, reviewer, settings),
+        anthropic_model_profile(),
+        settings,
+        writer=writer,
+        marker_key=b"test-marker-key-with-sufficient-entropy",
+    )
+    original = store.reviews.transition_run
+
+    async def crash_before_terminal(
+        run_id: str,
+        expected: ReviewRunState,
+        target: ReviewRunState,
+        now: datetime,
+        *,
+        reason: str | None = None,
+    ) -> bool:
+        if expected == ReviewRunState.PUBLISHING and target == ReviewRunState.COMPLETED:
+            return False
+        return await original(run_id, expected, target, now, reason=reason)
+
+    monkeypatch.setattr(store.reviews, "transition_run", crash_before_terminal)
+    with pytest.raises(RuntimeError, match="terminal transition"):
+        await executor.execute(lease, current, now=datetime(2026, 1, 1, tzinfo=UTC))
+    monkeypatch.setattr(store.reviews, "transition_run", original)
+    assert writer.remote_check["status"] == "completed"
+    statuses_before = list(writer.check_statuses)
+    assert (
+        await executor.execute(lease, current, now=datetime(2026, 1, 1, tzinfo=UTC)) == "completed"
+    )
+    assert writer.publish_calls == 1 and reviewer.calls == 1
+    assert writer.check_statuses == statuses_before

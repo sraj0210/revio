@@ -31,7 +31,11 @@ from revio.registries import ModelRegistry, ProviderRegistry
 def resolve_review_profile(settings: ReviewSettings):
     models = ModelRegistry()
     models.register(anthropic_model_profile())
-    alias = settings.review_model_alias or settings.review_fallback_alias
+    alias = (
+        settings.review_model_alias
+        if settings.review_model_alias is not None
+        else settings.review_fallback_alias
+    )
     profile = models.resolve(ModelAlias(value=alias))
     if "diff_only" not in profile.allowed_review_modes:
         raise ValueError("resolved review model does not support diff_only")

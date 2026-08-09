@@ -1,12 +1,13 @@
 """Crash/restart safety for durable Phase 4 generation."""
 
+import uuid
 from datetime import UTC, datetime
 
 import pytest
 
 from revio.adapters.ai.anthropic import anthropic_model_profile
 from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.review.execution import ReviewGenerationService
+from revio.application.review.execution import ReviewGenerationService, build_artifact
 from revio.config.review import ReviewSettings
 from revio.domain.models import (
     ChangeRequest,
@@ -18,10 +19,18 @@ from revio.domain.models import (
     ReviewResult,
     TokenUsage,
 )
-from revio.domain.reviews import PartialReason, ProviderCallState
+from revio.domain.reviews import (
+    PartialReason,
+    ProviderCallIdentity,
+    ProviderCallState,
+    ReviewRunState,
+    UsageDisposition,
+)
 from revio.errors import (
+    IncompleteReviewInputError,
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
+    ProviderCallObservedTerminalError,
     ProviderCallSafeRetryError,
 )
 from tests.conftest import AlembicDatabase
@@ -29,7 +38,7 @@ from tests.conftest import AlembicDatabase
 
 class AmbiguousReviewer:
     def __init__(self) -> None:
-        self.generations = 0
+        self.generations: int = 0
 
     async def preflight(self, request: ReviewRequest) -> dict[str, object]:
         return {"request": request}
@@ -88,6 +97,54 @@ class FindingsReviewer(AmbiguousReviewer):
                 )
                 for index, confidence in enumerate(self.confidences)
             ),
+        )
+
+
+class ObservedTerminalReviewer(AmbiguousReviewer):
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+    async def generate_preflighted(self, payload: dict[str, object]) -> ReviewResult:
+        self.generations += 1
+        raise ProviderCallObservedTerminalError(
+            "observed terminal",
+            usage=TokenUsage(uncached_input_tokens=11, output_tokens=3),
+            reason=self.reason,
+        )
+
+
+class MalformedThenObservedTerminalRepairReviewer(ObservedTerminalReviewer):
+    async def generate_preflighted(self, payload: dict[str, object]) -> ReviewResult:
+        self.generations += 1
+        if self.generations == 1:
+            raise MalformedProviderOutputError(
+                "malformed", usage=TokenUsage(uncached_input_tokens=5, output_tokens=2)
+            )
+        raise ProviderCallObservedTerminalError(
+            "observed repair terminal",
+            usage=TokenUsage(uncached_input_tokens=7, output_tokens=1),
+            reason=self.reason,
+        )
+
+
+class ReducingAdmissionReviewer(AmbiguousReviewer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.estimates: list[int] = []
+
+    async def preflight(self, request: ReviewRequest) -> dict[str, object]:
+        estimate = len(request.diff_files) * 100
+        self.estimates.append(estimate)
+        if len(request.diff_files) > 1:
+            raise IncompleteReviewInputError("reduce")
+        return {"request": request, "_revio_estimated_input_tokens": estimate}
+
+    async def generate_preflighted(self, payload: dict[str, object]) -> ReviewResult:
+        self.generations += 1
+        return ReviewResult(
+            summary="admitted",
+            usage=TokenUsage(uncached_input_tokens=73, output_tokens=9),
         )
 
 
@@ -348,3 +405,223 @@ async def test_custom_confidence_thresholds_control_routing(
     )
     assert [finding.confidence for finding in artifact.findings] == [0.70, 0.89, 0.90]
     assert [finding.inline_eligible for finding in artifact.findings] == [False, False, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "partial_reason"),
+    [
+        ("refusal", PartialReason.PROVIDER_REFUSAL),
+        ("max_tokens", PartialReason.PROVIDER_OUTPUT_TRUNCATED),
+    ],
+)
+async def test_observed_terminal_response_keeps_usage_and_never_advances_ordinal(
+    alembic_database: AlembicDatabase,
+    change_request: ChangeRequest,
+    reason: str,
+    partial_reason: PartialReason,
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    reviewer = ObservedTerminalReviewer(reason)
+    service = ReviewGenerationService(store.reviews, reviewer, ReviewSettings(review_enabled=True))
+    first = await service.generate(
+        run_id="run",
+        change_request=change_request,
+        diff=_diff(),
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    second = await service.generate(
+        run_id="run",
+        change_request=change_request,
+        diff=_diff(),
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    assert first == second and first.reason_codes == (partial_reason,)
+    assert reviewer.generations == 1
+    async with store.connect() as connection:
+        calls = await connection.execute_fetchall(
+            "SELECT call_ordinal, state FROM provider_calls ORDER BY call_ordinal"
+        )
+        usage = await connection.execute_fetchall(
+            "SELECT usage_status, uncached_input_tokens, output_tokens FROM provider_usage"
+        )
+    assert [tuple(row) for row in calls] == [(1, "completed")]
+    assert [tuple(row) for row in usage] == [("known", 11, 3)]
+
+
+@pytest.mark.asyncio
+async def test_restart_after_response_observed_completes_same_call_without_messages(
+    alembic_database: AlembicDatabase, change_request: ChangeRequest
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    identity = ProviderCallIdentity(
+        id=str(uuid.uuid5(uuid.NAMESPACE_URL, "revio:provider-call:run:initial:1")),
+        review_run_id="run",
+        call_kind="initial",
+        call_ordinal=1,
+        provider_id="anthropic",
+        model_profile_id="review-default",
+        model_profile_version="1",
+        prompt_version="review-v1",
+        schema_version="review-v1",
+    )
+    await store.reviews.reserve_call(identity, now)
+    assert await store.reviews.transition_call(
+        identity.id, ProviderCallState.RESERVED, ProviderCallState.ATTEMPT_STARTED, now
+    )
+    assert await store.reviews.transition_call(
+        identity.id,
+        ProviderCallState.ATTEMPT_STARTED,
+        ProviderCallState.RESPONSE_OBSERVED,
+        now,
+        usage=UsageDisposition(status="known", usage=TokenUsage(output_tokens=1)),
+    )
+    reviewer = FindingsReviewer(())
+    artifact = await ReviewGenerationService(
+        store.reviews, reviewer, ReviewSettings(review_enabled=True)
+    ).generate(
+        run_id="run",
+        change_request=change_request,
+        diff=_diff(),
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    assert artifact.reason_codes == (PartialReason.RESPONSE_RECOVERY_UNAVAILABLE,)
+    assert reviewer.generations == 0
+    call = await store.reviews.get_call(identity.id)
+    assert call is not None and call.state == ProviderCallState.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_observed_terminal_repair_keeps_usage_and_completes(
+    alembic_database: AlembicDatabase, change_request: ChangeRequest
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    reviewer = MalformedThenObservedTerminalRepairReviewer("refusal")
+    artifact = await ReviewGenerationService(
+        store.reviews, reviewer, ReviewSettings(review_enabled=True)
+    ).generate(
+        run_id="run",
+        change_request=change_request,
+        diff=_diff(),
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    assert artifact.partial and reviewer.generations == 2
+    async with store.connect() as connection:
+        rows = await connection.execute_fetchall(
+            "SELECT call_kind, state FROM provider_calls ORDER BY call_kind"
+        )
+        usage = await connection.execute_fetchall(
+            "SELECT usage_status, output_tokens FROM provider_usage ORDER BY provider_call_id"
+        )
+    assert [tuple(row) for row in rows] == [
+        ("initial", "completed"),
+        ("repair", "completed"),
+    ]
+    assert all(row[0] == "known" for row in usage)
+
+
+@pytest.mark.asyncio
+async def test_restart_after_artifact_persistence_finalizes_observed_call(
+    alembic_database: AlembicDatabase, change_request: ChangeRequest
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    identity = ProviderCallIdentity(
+        id=str(uuid.uuid5(uuid.NAMESPACE_URL, "revio:provider-call:run:initial:1")),
+        review_run_id="run",
+        call_kind="initial",
+        call_ordinal=1,
+        provider_id="anthropic",
+        model_profile_id="review-default",
+        model_profile_version="1",
+        prompt_version="review-v1",
+        schema_version="review-v1",
+    )
+    await store.reviews.reserve_call(identity, now)
+    assert await store.reviews.transition_call(
+        identity.id, ProviderCallState.RESERVED, ProviderCallState.ATTEMPT_STARTED, now
+    )
+    assert await store.reviews.transition_run(
+        "run", ReviewRunState.GENERATION_PENDING, ReviewRunState.GENERATION_ATTEMPTED, now
+    )
+    assert await store.reviews.transition_call(
+        identity.id,
+        ProviderCallState.ATTEMPT_STARTED,
+        ProviderCallState.RESPONSE_OBSERVED,
+        now,
+        usage=UsageDisposition(status="known", usage=TokenUsage(output_tokens=1)),
+    )
+    durable = build_artifact(
+        run_id="run",
+        profile=anthropic_model_profile(),
+        summary="AI review generation did not produce a usable review.",
+        findings=(),
+        partial=True,
+        reasons=(PartialReason.PROVIDER_REFUSAL,),
+        now=now,
+    )
+    assert await store.reviews.persist_artifact(durable, ReviewRunState.GENERATION_ATTEMPTED)
+    reviewer = FindingsReviewer(())
+    recovered = await ReviewGenerationService(
+        store.reviews, reviewer, ReviewSettings(review_enabled=True)
+    ).generate(
+        run_id="run",
+        change_request=change_request,
+        diff=_diff(),
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    assert recovered == durable and reviewer.generations == 0
+    call = await store.reviews.get_call(identity.id)
+    assert call is not None and call.state == ProviderCallState.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_final_token_estimate_is_durable_and_separate_from_billed_usage(
+    alembic_database: AlembicDatabase, change_request: ChangeRequest
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    reviewer = ReducingAdmissionReviewer()
+    diff = DiffCollection(
+        items=tuple(
+            DiffFile(
+                new_path=path,
+                status="added",
+                lines=(DiffLine(content="x = 1", side="new", new_line=1),),
+            )
+            for path in ("a.py", "b.py")
+        ),
+        expected_file_count=2,
+    )
+    artifact = await ReviewGenerationService(
+        store.reviews, reviewer, ReviewSettings(review_enabled=True)
+    ).generate(
+        run_id="run",
+        change_request=change_request,
+        diff=diff,
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    assert artifact.partial and reviewer.estimates == [200, 100]
+    async with store.connect() as connection:
+        call = await connection.execute_fetchall(
+            "SELECT estimated_input_tokens FROM provider_calls"
+        )
+        usage = await connection.execute_fetchall(
+            "SELECT uncached_input_tokens FROM provider_usage"
+        )
+    assert [tuple(row) for row in call] == [(100,)]
+    assert [tuple(row) for row in usage] == [(73,)]

@@ -15,7 +15,7 @@ class ReviewSettings(BaseSettings):
     review_publish_enabled: bool = False
     publish_marker_key: SecretStr | None = None
     publish_marker_key_file: Path | None = None
-    review_model_alias: str = "review-default"
+    review_model_alias: str | None = None
     review_fallback_alias: str = "review-default"
     review_input_token_ceiling: int = Field(default=120_000, gt=0, le=240_000)
     review_input_token_safety_margin: int = Field(default=2_000, gt=0, le=20_000)

@@ -93,6 +93,15 @@ class ProviderCallTerminalError(RevioError):
     """A provider outcome is terminal for generation but maps to a safe partial artifact."""
 
 
+class ProviderCallObservedTerminalError(RevioError):
+    """A trustworthy Messages response was observed but cannot produce a usable review."""
+
+    def __init__(self, message: str, *, usage: object, reason: str) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.reason = reason
+
+
 class MalformedProviderOutputError(RevioError):
     """A trustworthy provider response failed local semantic validation."""
 
@@ -111,3 +120,7 @@ class ProviderWriteAmbiguousError(RevioError):
 
 class ProviderWriteRejectedError(RevioError):
     """A provider proved that a write did not create an object."""
+
+
+class ProviderAnchorRejectedError(ProviderWriteRejectedError):
+    """A review POST was positively rejected for invalid inline anchors."""

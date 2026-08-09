@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS provider_calls (
     model_profile_version TEXT NOT NULL,
     prompt_version TEXT NOT NULL,
     schema_version TEXT NOT NULL,
+    estimated_input_tokens INTEGER NOT NULL CHECK(estimated_input_tokens >= 0),
     state TEXT NOT NULL CHECK(state IN (
         'reserved', 'attempt_started', 'response_observed', 'ambiguous',
         'known_rejected', 'completed'

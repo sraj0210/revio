@@ -19,6 +19,7 @@ from revio.domain.reviews import (
     WriteOperationState,
 )
 from revio.errors import (
+    ProviderAnchorRejectedError,
     ProviderWriteAmbiguousError,
     ProviderWriteRejectedError,
     ReconciliationIntegrityError,
@@ -220,6 +221,18 @@ class ReviewJobExecutor:
             conclusion=("neutral" if neutral else "success") if status == "completed" else None,
             summary=check_summary(summary),
         )
+        remote = await self._writer.get_check_run(target, operation.provider_id)
+        output = remote.get("output")
+        output_mapping = cast(dict[object, object], output) if isinstance(output, dict) else {}
+        already_applied = (
+            remote.get("status") == status
+            and remote.get("conclusion") == details.conclusion
+            and output_mapping.get("summary") == details.summary
+        )
+        if already_applied:
+            return True
+        if status == "in_progress" and remote.get("status") == "completed":
+            return False
         try:
             await self._writer.update_check_run(target, operation.provider_id, details)
             return True
@@ -234,6 +247,28 @@ class ReviewJobExecutor:
             )
             return applied
 
+    async def _finish_check_or_indeterminate(
+        self,
+        lease: JobLease,
+        check: WriteOperationRecord,
+        artifact: NormalizedReviewArtifact,
+        summary: str,
+        now: datetime,
+        *,
+        neutral: bool,
+    ) -> bool:
+        if await self._update_check(lease, check, artifact, summary, neutral=neutral):
+            return True
+        if not await self._repository.transition_run(
+            artifact.review_run_id,
+            ReviewRunState.PUBLISHING,
+            ReviewRunState.CHECK_RUN_INDETERMINATE,
+            now,
+            reason="terminal_check_update_indeterminate",
+        ):
+            raise RuntimeError("terminal Check Run indeterminate transition failed")
+        return False
+
     async def _publish(
         self,
         lease: JobLease,
@@ -241,7 +276,13 @@ class ReviewJobExecutor:
         diff: DiffCollection,
         check: WriteOperationRecord,
         now: datetime,
-    ) -> Literal["completed", "partial", "superseded", "publication_indeterminate"]:
+    ) -> Literal[
+        "completed",
+        "partial",
+        "superseded",
+        "publication_indeterminate",
+        "check_run_indeterminate",
+    ]:
         assert self._writer is not None and self._marker_key is not None
         target = lease.job.event.change_request
         assert target is not None
@@ -291,17 +332,27 @@ class ReviewJobExecutor:
                     reason="incomplete_reconciliation",
                 )
                 return "publication_indeterminate"
-            await self._repository.transition_write_operation(
-                "publish",
-                operation.id,
-                operation.state,
+            if operation.state not in {
+                WriteOperationState.COMPLETED,
                 WriteOperationState.RECONCILED,
+            }:
+                await self._repository.transition_write_operation(
+                    "publish",
+                    operation.id,
+                    operation.state,
+                    WriteOperationState.RECONCILED,
+                    now,
+                    provider_id=reconciliation.provider_ids[0],
+                )
+            if not await self._finish_check_or_indeterminate(
+                lease,
+                check,
+                artifact,
+                publication_summary(artifact),
                 now,
-                provider_id=reconciliation.provider_ids[0],
-            )
-            await self._update_check(
-                lease, check, artifact, publication_summary(artifact), neutral=artifact.partial
-            )
+                neutral=artifact.partial,
+            ):
+                return "check_run_indeterminate"
             return "partial" if artifact.partial else "completed"
         if operation.state != WriteOperationState.RESERVED_UNATTEMPTED:
             await self._repository.transition_run(
@@ -363,7 +414,7 @@ class ReviewJobExecutor:
                 marker=marker,
                 commit_id=current.head_sha,
             )
-        except ProviderWriteRejectedError:
+        except ProviderAnchorRejectedError:
             await self._repository.transition_write_operation(
                 "publish",
                 operation.id,
@@ -405,13 +456,15 @@ class ReviewJobExecutor:
                     now,
                     provider_id=complete.provider_ids[0],
                 )
-                await self._update_check(
+                if not await self._finish_check_or_indeterminate(
                     lease,
                     check,
                     artifact,
                     publication_summary(artifact),
+                    now,
                     neutral=artifact.partial,
-                )
+                ):
+                    return "check_run_indeterminate"
                 return "partial" if artifact.partial else "completed"
             if not complete.actionable_zero:
                 await self._repository.transition_run(
@@ -462,6 +515,31 @@ class ReviewJobExecutor:
                     terminal_reason="fallback_ambiguous",
                 )
                 provider_id = ""
+        except ProviderWriteRejectedError:
+            await self._repository.transition_write_operation(
+                "publish",
+                operation.id,
+                WriteOperationState.ATTEMPT_STARTED,
+                WriteOperationState.KNOWN_REJECTED,
+                now,
+                terminal_reason="generic_validation_rejection",
+            )
+            if not await self._repository.transition_run(
+                artifact.review_run_id,
+                ReviewRunState.PUBLISHING,
+                ReviewRunState.PUBLICATION_INDETERMINATE,
+                now,
+                reason="generic_validation_rejection",
+            ):
+                raise RuntimeError("generic validation terminal transition failed") from None
+            await self._update_check(
+                lease,
+                check,
+                artifact,
+                "Review publication was rejected.",
+                neutral=True,
+            )
+            return "publication_indeterminate"
         except ProviderWriteAmbiguousError:
             await self._repository.transition_write_operation(
                 "publish",
@@ -519,13 +597,15 @@ class ReviewJobExecutor:
                 now,
                 provider_id=provider_id,
             )
-        await self._update_check(
+        if not await self._finish_check_or_indeterminate(
             lease,
             check,
             artifact,
             publication_summary(artifact),
+            now,
             neutral=artifact.partial,
-        )
+        ):
+            return "check_run_indeterminate"
         return "partial" if artifact.partial else "completed"
 
     async def execute(
@@ -586,40 +666,46 @@ class ReviewJobExecutor:
                 ):
                     raise RuntimeError("Check Run indeterminate transition failed")
             return "check_run_indeterminate"
-        in_progress = await self._update_check(
-            lease,
-            check,
-            build_artifact(
+        if run.state in {ReviewRunState.ARTIFACT_DURABLE, ReviewRunState.PUBLISHING}:
+            artifact = await self._repository.get_artifact(run.id)
+            if artifact is None:
+                raise RuntimeError("durable review stage is missing its artifact")
+            diff = await self._reader.get_diff(current.target)
+        else:
+            in_progress = await self._update_check(
+                lease,
+                check,
+                build_artifact(
+                    run_id=run.id,
+                    profile=self._profile,
+                    summary="Review in progress.",
+                    findings=(),
+                    partial=False,
+                    reasons=(),
+                    now=current_time,
+                ),
+                "Review in progress.",
+                neutral=False,
+                status="in_progress",
+            )
+            if not in_progress:
+                if not await self._repository.transition_run(
+                    run.id,
+                    run.state,
+                    ReviewRunState.CHECK_RUN_INDETERMINATE,
+                    current_time,
+                    reason="check_run_update_indeterminate",
+                ):
+                    raise RuntimeError("Check Run update indeterminate transition failed")
+                return "check_run_indeterminate"
+            diff = await self._reader.get_diff(current.target)
+            artifact = await self._generation.generate(
                 run_id=run.id,
+                change_request=current,
+                diff=diff,
                 profile=self._profile,
-                summary="Review in progress.",
-                findings=(),
-                partial=False,
-                reasons=(),
                 now=current_time,
-            ),
-            "Review in progress.",
-            neutral=False,
-            status="in_progress",
-        )
-        if not in_progress:
-            if not await self._repository.transition_run(
-                run.id,
-                ReviewRunState.GENERATION_PENDING,
-                ReviewRunState.CHECK_RUN_INDETERMINATE,
-                current_time,
-                reason="check_run_update_indeterminate",
-            ):
-                raise RuntimeError("Check Run update indeterminate transition failed")
-            return "check_run_indeterminate"
-        diff = await self._reader.get_diff(current.target)
-        artifact = await self._generation.generate(
-            run_id=run.id,
-            change_request=current,
-            diff=diff,
-            profile=self._profile,
-            now=current_time,
-        )
+            )
         if run.state != ReviewRunState.PUBLISHING:
             if not await self._repository.transition_run(
                 run.id,

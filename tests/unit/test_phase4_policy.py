@@ -60,10 +60,20 @@ def test_compose_propagates_explicit_environment_to_all_services() -> None:
 
 
 def test_model_alias_resolution_is_administrator_controlled() -> None:
-    profile = resolve_review_profile(ReviewSettings(review_model_alias="review-default"))
+    profile = resolve_review_profile(ReviewSettings(review_fallback_alias="review-default"))
     assert profile.provider_model_id == "claude-sonnet-5"
+    explicit = resolve_review_profile(
+        ReviewSettings(
+            review_model_alias="review-default", review_fallback_alias="unknown-fallback"
+        )
+    )
+    assert explicit.alias.value == "review-default"
     with pytest.raises(UnknownModelAliasError):
         resolve_review_profile(ReviewSettings(review_model_alias="unknown"))
+    with pytest.raises(UnknownModelAliasError):
+        resolve_review_profile(
+            ReviewSettings(review_model_alias=None, review_fallback_alias="unknown")
+        )
 
 
 def test_marker_and_key_identity_are_case_preserving_and_separated() -> None:

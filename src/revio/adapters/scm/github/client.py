@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from revio.adapters.scm.github.auth import GitHubAppJWT, InstallationToken, InstallationTokenCache
 from revio.adapters.scm.github.dto.api import GitHubTokenDTO
 from revio.adapters.scm.github.errors import (
+    GitHubAnchorValidationRejectedError,
     GitHubAuthenticationError,
     GitHubConfigurationError,
     GitHubNotFoundError,
@@ -166,8 +167,43 @@ class GitHubClient:
             raise GitHubAmbiguousWriteError("GitHub write outcome is ambiguous") from None
         if response.status_code in {301, 302, 307, 308, 401} or response.status_code >= 500:
             raise GitHubAmbiguousWriteError("GitHub write response is ambiguous")
+        if (
+            response.status_code == 422
+            and method == "POST"
+            and current_path.endswith("/reviews")
+            and self._is_anchor_validation(response)
+        ):
+            raise GitHubAnchorValidationRejectedError(
+                "GitHub rejected an inline review-comment anchor"
+            )
         self.raise_for_response(response)
         return response
+
+    @staticmethod
+    def _is_anchor_validation(response: httpx.Response) -> bool:
+        try:
+            body = cast(object, response.json())
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(body, dict):
+            return False
+        errors = cast(dict[object, object], body).get("errors")
+        if not isinstance(errors, list):
+            return False
+        error_items = cast(list[object], errors)
+        if len(error_items) > 100:
+            return False
+        anchor_fields = {"line", "side", "path", "position", "commit_id"}
+        for item in error_items:
+            if not isinstance(item, dict):
+                continue
+            error = cast(dict[object, object], item)
+            if (
+                error.get("resource") == "PullRequestReviewComment"
+                and error.get("field") in anchor_fields
+            ):
+                return True
+        return False
 
     @staticmethod
     def _retry_after(response: httpx.Response) -> float | None:

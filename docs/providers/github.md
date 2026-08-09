@@ -34,6 +34,12 @@ responses are ambiguous: the client does not refresh credentials and repeat the 
 the stable Check Run identity or review marker instead. A 401 response is not assumed to prove that
 the provider had no effect.
 
+Only bounded structured 422 metadata that identifies a `PullRequestReviewComment` anchor field is
+classified as the approved non-creating anchor rejection. Generic, spam-style, malformed, and
+unrecognized 422 responses fail closed and never authorize a summary-only fallback POST. A durable
+review outcome is not completed until the same Check Run's terminal PATCH succeeds or an exact GET
+confirms the desired terminal state.
+
 ## Partial data
 
 Changed-file and tree collections carry a completeness value: `complete`, `provider_truncated`, `service_page_limit`, or `service_item_limit`. Exact duplicate changed-file entries are deduplicated, conflicting duplicates fail safely, and completeness uses the unique validated file count. Each changed file separately reports `complete`, `missing`, `malformed`, `provider_truncated`, or `no_textual_patch_unknown_reason` patch state. GitHub's changed-files response does not authoritatively distinguish binary files from other reasons a textual patch is absent, so Revio does not infer either binary content or provider truncation from change counts alone. Non-complete and non-`complete` patch values must never be treated as a full textual provider result.

@@ -1,6 +1,7 @@
 """Safe GitHub error classification."""
 
 from revio.errors import (
+    ProviderAnchorRejectedError,
     ProviderTransientError,
     ProviderWriteAmbiguousError,
     ProviderWriteRejectedError,
@@ -50,6 +51,10 @@ class GitHubResponseError(GitHubError):
 
 class GitHubValidationError(GitHubError, ProviderWriteRejectedError):
     pass
+
+
+class GitHubAnchorValidationRejectedError(GitHubError, ProviderAnchorRejectedError):
+    """GitHub positively identified an inline review-comment anchor failure."""
 
 
 class GitHubAmbiguousWriteError(GitHubError, ProviderWriteAmbiguousError):
