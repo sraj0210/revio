@@ -85,6 +85,14 @@ class ProviderCallRejectedError(RevioError):
     """A provider explicitly rejected a call before producing a result."""
 
 
+class ProviderCallSafeRetryError(ProviderTransientError):
+    """A Messages request was explicitly rejected without generation and may retry."""
+
+
+class ProviderCallTerminalError(RevioError):
+    """A provider outcome is terminal for generation but maps to a safe partial artifact."""
+
+
 class MalformedProviderOutputError(RevioError):
     """A trustworthy provider response failed local semantic validation."""
 

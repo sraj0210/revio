@@ -130,7 +130,10 @@ CREATE TABLE IF NOT EXISTS review_runs (
     check_run_external_id TEXT NOT NULL UNIQUE,
     terminal_reason TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    CHECK((state IN ('superseded', 'publication_indeterminate', 'check_run_indeterminate')
+           AND terminal_reason IS NOT NULL)
+       OR (state NOT IN ('superseded', 'publication_indeterminate', 'check_run_indeterminate')))
 );
 
 CREATE TABLE IF NOT EXISTS provider_calls (
@@ -198,7 +201,9 @@ CREATE TABLE IF NOT EXISTS check_run_operations (
     attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
     terminal_reason TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    CHECK((state IN ('completed', 'reconciled') AND provider_check_run_id IS NOT NULL)
+       OR (state NOT IN ('completed', 'reconciled') AND provider_check_run_id IS NULL))
 );
 
 CREATE TABLE IF NOT EXISTS publish_operations (
@@ -216,7 +221,9 @@ CREATE TABLE IF NOT EXISTS publish_operations (
     attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
     terminal_reason TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    CHECK((state IN ('completed', 'reconciled') AND provider_review_id IS NOT NULL)
+       OR (state NOT IN ('completed', 'reconciled') AND provider_review_id IS NULL))
 );
 
 CREATE INDEX IF NOT EXISTS ix_provider_calls_run ON provider_calls(review_run_id, call_kind);

@@ -31,7 +31,8 @@ from revio.errors import (
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
     ProviderCallRejectedError,
-    ProviderTransientError,
+    ProviderCallSafeRetryError,
+    ProviderCallTerminalError,
 )
 from revio.ports.persistence import ReviewRepository
 
@@ -68,20 +69,38 @@ class DiffLimiter:
                 patch_complete = False
                 reasons.append(f"patch_{item.patch_state}")
                 continue
-            encoded = json.dumps(item.model_dump(mode="json"), separators=(",", ":")).encode()
-            if len(encoded) > self._settings.review_max_patch_bytes:
-                reasons.append("service_patch_byte_limit")
-                continue
-            lines = len(item.lines)
-            if total_lines + lines > self._settings.review_max_lines:
+            retained = item
+            encoded = json.dumps(retained.model_dump(mode="json"), separators=(",", ":")).encode()
+            line_budget = self._settings.review_max_lines - total_lines
+            byte_budget = min(
+                self._settings.review_max_patch_bytes,
+                self._settings.review_max_bytes - total_bytes,
+            )
+            if len(item.lines) > line_budget:
+                retained = item.model_copy(update={"lines": item.lines[: max(line_budget, 0)]})
                 reasons.append("service_line_limit")
+            while retained.lines:
+                encoded = json.dumps(
+                    retained.model_dump(mode="json"), separators=(",", ":")
+                ).encode()
+                if len(encoded) <= byte_budget:
+                    break
+                retained = retained.model_copy(update={"lines": retained.lines[:-1]})
+                reasons.append(
+                    "service_patch_byte_limit"
+                    if byte_budget == self._settings.review_max_patch_bytes
+                    else "service_byte_limit"
+                )
+            encoded = json.dumps(retained.model_dump(mode="json"), separators=(",", ":")).encode()
+            if not retained.lines or len(encoded) > byte_budget:
+                if byte_budget <= 0:
+                    reasons.append("service_byte_limit")
                 break
-            if total_bytes + len(encoded) > self._settings.review_max_bytes:
-                reasons.append("service_byte_limit")
-                break
-            accepted.append(item)
-            total_lines += lines
+            accepted.append(retained)
+            total_lines += len(retained.lines)
             total_bytes += len(encoded)
+            if len(retained.lines) != len(item.lines):
+                break
         expected = collection.expected_file_count
         returned = len({(item.old_path, item.new_path, item.status) for item in collection.items})
         if expected is None:
@@ -215,29 +234,49 @@ class ReviewGenerationService:
             diff_files=files,
             model_profile=profile,
         )
-        try:
-            payload = await self._reviewer.preflight(request)
-        except IncompleteReviewInputError:
-            return await self._fallback(
-                run_id,
-                profile,
-                PartialReason.INPUT_TRUNCATED,
-                "Review input exceeded the approved token admission ceiling.",
-                current_time,
-                ReviewRunState.GENERATION_PENDING,
-            )
+        token_reduced = False
+        while True:
+            try:
+                payload = await self._reviewer.preflight(request)
+                break
+            except IncompleteReviewInputError:
+                if len(request.diff_files) <= 1:
+                    return await self._fallback(
+                        run_id,
+                        profile,
+                        PartialReason.INPUT_TRUNCATED,
+                        "Review input exceeded the approved token admission ceiling.",
+                        current_time,
+                        ReviewRunState.GENERATION_PENDING,
+                    )
+                token_reduced = True
+                request = request.model_copy(update={"diff_files": request.diff_files[:-1]})
+            except ProviderCallTerminalError:
+                return await self._fallback(
+                    run_id,
+                    profile,
+                    PartialReason.PROVIDER_REFUSAL,
+                    "AI review preflight was rejected.",
+                    current_time,
+                    ReviewRunState.GENERATION_PENDING,
+                )
+        latest = await self._repository.latest_call(run_id, "initial")
+        ordinal = 1 if latest is None else latest.identity.call_ordinal
+        if latest is not None and latest.state == ProviderCallState.KNOWN_REJECTED:
+            ordinal += 1
+            latest = None
         call_identity = ProviderCallIdentity(
-            id=_id("provider-call", f"{run_id}:initial:1"),
+            id=_id("provider-call", f"{run_id}:initial:{ordinal}"),
             review_run_id=run_id,
             call_kind="initial",
-            call_ordinal=1,
+            call_ordinal=ordinal,
             provider_id=str(profile.provider_id),
             model_profile_id=profile.alias.value,
             model_profile_version=profile.profile_version,
             prompt_version=PROMPT_VERSION,
             schema_version=SCHEMA_VERSION,
         )
-        call = await self._repository.reserve_call(call_identity, current_time)
+        call = latest or await self._repository.reserve_call(call_identity, current_time)
         if call.state == ProviderCallState.ATTEMPT_STARTED:
             await self._repository.transition_call(
                 call.identity.id,
@@ -261,7 +300,7 @@ class ReviewGenerationService:
                 "AI review response could not be recovered after restart.",
                 current_time,
             )
-        if call.state in {ProviderCallState.AMBIGUOUS, ProviderCallState.KNOWN_REJECTED}:
+        if call.state == ProviderCallState.AMBIGUOUS:
             return await self._fallback(
                 run_id,
                 profile,
@@ -271,9 +310,14 @@ class ReviewGenerationService:
             )
         if call.state == ProviderCallState.COMPLETED:
             artifact = await self._repository.get_artifact(run_id)
-            if artifact is None:
-                raise RuntimeError("completed provider call is missing its artifact")
-            return artifact
+            if artifact is not None:
+                return artifact
+            return await self._repair(
+                run_id=run_id,
+                profile=profile,
+                payload=payload,
+                now=current_time,
+            )
         if not await self._repository.transition_call(
             call.identity.id,
             ProviderCallState.RESERVED,
@@ -305,130 +349,9 @@ class ReviewGenerationService:
                 ProviderCallState.COMPLETED,
                 current_time,
             )
-            try:
-                repair_payload = await self._reviewer.repair_preflight(payload)
-            except (IncompleteReviewInputError, ProviderTransientError):
-                return await self._fallback(
-                    run_id,
-                    profile,
-                    PartialReason.REPAIR_FAILED,
-                    "AI review output could not be validated.",
-                    current_time,
-                )
-            repair_identity = ProviderCallIdentity(
-                id=_id("provider-call", f"{run_id}:repair:1"),
-                review_run_id=run_id,
-                call_kind="repair",
-                call_ordinal=1,
-                provider_id=str(profile.provider_id),
-                model_profile_id=profile.alias.value,
-                model_profile_version=profile.profile_version,
-                prompt_version=PROMPT_VERSION,
-                schema_version=SCHEMA_VERSION,
+            return await self._repair(
+                run_id=run_id, profile=profile, payload=payload, now=current_time
             )
-            repair = await self._repository.reserve_call(repair_identity, current_time)
-            if repair.state != ProviderCallState.RESERVED:
-                if repair.state == ProviderCallState.ATTEMPT_STARTED:
-                    await self._repository.transition_call(
-                        repair.identity.id,
-                        ProviderCallState.ATTEMPT_STARTED,
-                        ProviderCallState.AMBIGUOUS,
-                        current_time,
-                        usage=UsageDisposition(status="unknown"),
-                    )
-                return await self._fallback(
-                    run_id,
-                    profile,
-                    PartialReason.REPAIR_FAILED,
-                    "AI review repair outcome was unavailable.",
-                    current_time,
-                )
-            if not await self._repository.transition_call(
-                repair.identity.id,
-                ProviderCallState.RESERVED,
-                ProviderCallState.ATTEMPT_STARTED,
-                current_time,
-            ):
-                raise RuntimeError("repair attempt could not start") from None
-            try:
-                repaired = await self._reviewer.generate_preflighted(repair_payload)
-            except ProviderCallAmbiguousError:
-                await self._repository.transition_call(
-                    repair.identity.id,
-                    ProviderCallState.ATTEMPT_STARTED,
-                    ProviderCallState.AMBIGUOUS,
-                    current_time,
-                    usage=UsageDisposition(status="unknown"),
-                )
-                return await self._fallback(
-                    run_id,
-                    profile,
-                    PartialReason.REPAIR_FAILED,
-                    "AI review repair outcome could not be confirmed.",
-                    current_time,
-                )
-            except MalformedProviderOutputError as repair_error:
-                repair_usage = repair_error.usage
-                if not isinstance(repair_usage, TokenUsage):
-                    raise RuntimeError("repair output lacked normalized usage") from None
-                await self._repository.transition_call(
-                    repair.identity.id,
-                    ProviderCallState.ATTEMPT_STARTED,
-                    ProviderCallState.RESPONSE_OBSERVED,
-                    current_time,
-                    usage=UsageDisposition(status="known", usage=repair_usage),
-                )
-                await self._repository.transition_call(
-                    repair.identity.id,
-                    ProviderCallState.RESPONSE_OBSERVED,
-                    ProviderCallState.COMPLETED,
-                    current_time,
-                )
-                return await self._fallback(
-                    run_id,
-                    profile,
-                    PartialReason.REPAIR_FAILED,
-                    "AI review output could not be validated after one repair.",
-                    current_time,
-                )
-            except ProviderCallRejectedError:
-                await self._repository.transition_call(
-                    repair.identity.id,
-                    ProviderCallState.ATTEMPT_STARTED,
-                    ProviderCallState.KNOWN_REJECTED,
-                    current_time,
-                )
-                return await self._fallback(
-                    run_id,
-                    profile,
-                    PartialReason.REPAIR_FAILED,
-                    "AI review repair was rejected.",
-                    current_time,
-                )
-            await self._repository.transition_call(
-                repair.identity.id,
-                ProviderCallState.ATTEMPT_STARTED,
-                ProviderCallState.RESPONSE_OBSERVED,
-                current_time,
-                usage=UsageDisposition(status="known", usage=repaired.usage),
-            )
-            artifact = build_artifact(
-                run_id=run_id,
-                profile=profile,
-                summary=repaired.summary,
-                findings=(),
-                partial=True,
-                reasons=(PartialReason.OUTPUT_INVALID,),
-                now=current_time,
-            )
-            await self._repository.persist_artifact(artifact, ReviewRunState.GENERATION_ATTEMPTED)
-            await self._repository.transition_call(
-                repair.identity.id,
-                ProviderCallState.RESPONSE_OBSERVED,
-                ProviderCallState.COMPLETED,
-                current_time,
-            )
-            return artifact
         except ProviderCallAmbiguousError:
             await self._repository.transition_call(
                 call.identity.id,
@@ -444,7 +367,7 @@ class ReviewGenerationService:
                 "AI review outcome could not be confirmed.",
                 current_time,
             )
-        except (ProviderCallRejectedError, ProviderTransientError):
+        except ProviderCallSafeRetryError:
             await self._repository.transition_call(
                 call.identity.id,
                 ProviderCallState.ATTEMPT_STARTED,
@@ -452,6 +375,20 @@ class ReviewGenerationService:
                 current_time,
             )
             raise
+        except (ProviderCallRejectedError, ProviderCallTerminalError):
+            await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.ATTEMPT_STARTED,
+                ProviderCallState.KNOWN_REJECTED,
+                current_time,
+            )
+            return await self._fallback(
+                run_id,
+                profile,
+                PartialReason.PROVIDER_REFUSAL,
+                "AI review generation was rejected.",
+                current_time,
+            )
         await self._repository.transition_call(
             call.identity.id,
             ProviderCallState.ATTEMPT_STARTED,
@@ -459,18 +396,34 @@ class ReviewGenerationService:
             current_time,
             usage=UsageDisposition(status="known", usage=result.usage),
         )
-        routed = tuple(
+        accepted = tuple(
             item
             for item in result.findings
             if item.confidence >= self._settings.review_summary_confidence
-        )[: self._settings.review_max_findings]
+        )
+        overflow = len(accepted) > self._settings.review_max_findings
+        partial = overflow or token_reduced
+        routed = tuple(
+            item.model_copy(
+                update={
+                    "inline_eligible": item.confidence >= self._settings.review_inline_confidence
+                }
+            )
+            for item in accepted[: self._settings.review_max_findings]
+        )
         artifact = build_artifact(
             run_id=run_id,
             profile=profile,
             summary=result.summary,
-            findings=routed,
-            partial=False,
-            reasons=(),
+            findings=() if partial else routed,
+            partial=partial,
+            reasons=(
+                (PartialReason.FINDINGS_TRUNCATED,)
+                if overflow
+                else (PartialReason.INPUT_TRUNCATED,)
+                if token_reduced
+                else ()
+            ),
             now=current_time,
         )
         await self._repository.persist_artifact(artifact, ReviewRunState.GENERATION_ATTEMPTED)
@@ -479,5 +432,158 @@ class ReviewGenerationService:
             ProviderCallState.RESPONSE_OBSERVED,
             ProviderCallState.COMPLETED,
             current_time,
+        )
+        return artifact
+
+    async def _repair(
+        self,
+        *,
+        run_id: str,
+        profile: ResolvedModelProfile,
+        payload: dict[str, object],
+        now: datetime,
+    ) -> NormalizedReviewArtifact:
+        try:
+            repair_payload = await self._reviewer.repair_preflight(payload)
+        except (IncompleteReviewInputError, ProviderCallTerminalError):
+            return await self._fallback(
+                run_id,
+                profile,
+                PartialReason.REPAIR_FAILED,
+                "AI review output could not be validated.",
+                now,
+            )
+        latest = await self._repository.latest_call(run_id, "repair")
+        ordinal = 1 if latest is None else latest.identity.call_ordinal
+        if latest is not None and latest.state == ProviderCallState.KNOWN_REJECTED:
+            ordinal += 1
+            latest = None
+        identity = ProviderCallIdentity(
+            id=_id("provider-call", f"{run_id}:repair:{ordinal}"),
+            review_run_id=run_id,
+            call_kind="repair",
+            call_ordinal=ordinal,
+            provider_id=str(profile.provider_id),
+            model_profile_id=profile.alias.value,
+            model_profile_version=profile.profile_version,
+            prompt_version=PROMPT_VERSION,
+            schema_version=SCHEMA_VERSION,
+        )
+        call = latest or await self._repository.reserve_call(identity, now)
+        if call.state == ProviderCallState.ATTEMPT_STARTED:
+            await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.ATTEMPT_STARTED,
+                ProviderCallState.AMBIGUOUS,
+                now,
+                usage=UsageDisposition(status="unknown"),
+            )
+            return await self._fallback(
+                run_id,
+                profile,
+                PartialReason.REPAIR_FAILED,
+                "AI review repair outcome was unavailable.",
+                now,
+            )
+        if call.state in {ProviderCallState.AMBIGUOUS, ProviderCallState.RESPONSE_OBSERVED}:
+            return await self._fallback(
+                run_id,
+                profile,
+                PartialReason.REPAIR_FAILED,
+                "AI review repair outcome was unavailable.",
+                now,
+            )
+        if call.state == ProviderCallState.COMPLETED:
+            return await self._fallback(
+                run_id,
+                profile,
+                PartialReason.REPAIR_FAILED,
+                "AI review repair response could not be recovered.",
+                now,
+            )
+        if not await self._repository.transition_call(
+            call.identity.id, ProviderCallState.RESERVED, ProviderCallState.ATTEMPT_STARTED, now
+        ):
+            raise RuntimeError("repair attempt could not start")
+        try:
+            result = await self._reviewer.generate_preflighted(repair_payload)
+        except ProviderCallSafeRetryError:
+            await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.ATTEMPT_STARTED,
+                ProviderCallState.KNOWN_REJECTED,
+                now,
+            )
+            raise
+        except ProviderCallAmbiguousError:
+            await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.ATTEMPT_STARTED,
+                ProviderCallState.AMBIGUOUS,
+                now,
+                usage=UsageDisposition(status="unknown"),
+            )
+            return await self._fallback(
+                run_id,
+                profile,
+                PartialReason.REPAIR_FAILED,
+                "AI review repair outcome could not be confirmed.",
+                now,
+            )
+        except MalformedProviderOutputError as error:
+            if not isinstance(error.usage, TokenUsage):
+                raise RuntimeError("repair output lacked normalized usage") from None
+            await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.ATTEMPT_STARTED,
+                ProviderCallState.RESPONSE_OBSERVED,
+                now,
+                usage=UsageDisposition(status="known", usage=error.usage),
+            )
+            await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.RESPONSE_OBSERVED,
+                ProviderCallState.COMPLETED,
+                now,
+            )
+            return await self._fallback(
+                run_id,
+                profile,
+                PartialReason.REPAIR_FAILED,
+                "AI review output could not be validated after one repair.",
+                now,
+            )
+        except (ProviderCallRejectedError, ProviderCallTerminalError):
+            await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.ATTEMPT_STARTED,
+                ProviderCallState.KNOWN_REJECTED,
+                now,
+            )
+            return await self._fallback(
+                run_id, profile, PartialReason.REPAIR_FAILED, "AI review repair was rejected.", now
+            )
+        await self._repository.transition_call(
+            call.identity.id,
+            ProviderCallState.ATTEMPT_STARTED,
+            ProviderCallState.RESPONSE_OBSERVED,
+            now,
+            usage=UsageDisposition(status="known", usage=result.usage),
+        )
+        artifact = build_artifact(
+            run_id=run_id,
+            profile=profile,
+            summary=result.summary,
+            findings=(),
+            partial=True,
+            reasons=(PartialReason.OUTPUT_INVALID,),
+            now=now,
+        )
+        if not await self._repository.persist_artifact(
+            artifact, ReviewRunState.GENERATION_ATTEMPTED
+        ):
+            raise RuntimeError("repair artifact could not be persisted")
+        await self._repository.transition_call(
+            call.identity.id, ProviderCallState.RESPONSE_OBSERVED, ProviderCallState.COMPLETED, now
         )
         return artifact

@@ -135,6 +135,11 @@ class QueueProcessor:
                     )
                 )
                 return
+            except Exception:
+                await self._require_owned(
+                    await self._repository.terminate(lease, "dead", "review_execution_failed", now)
+                )
+                return
             if outcome == "superseded":
                 await self._require_owned(
                     await self._repository.terminate(

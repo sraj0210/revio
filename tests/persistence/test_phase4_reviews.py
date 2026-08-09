@@ -16,6 +16,7 @@ from revio.domain.reviews import (
     UsageDisposition,
     WriteOperationState,
 )
+from revio.errors import PersistenceIntegrityError
 from tests.conftest import AlembicDatabase
 
 
@@ -167,3 +168,53 @@ async def test_concurrent_provider_call_attempt_has_exactly_one_winner(
         )
     )
     assert winners.count(True) == 1
+
+
+@pytest.mark.asyncio
+async def test_illegal_provider_and_write_transitions_are_rejected(
+    alembic_database: AlembicDatabase,
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _job(store, now)
+    await store.reviews.create_run(
+        run_id="run",
+        job_id="job",
+        head_sha="head",
+        base_sha="base",
+        external_id="external",
+        now=now,
+    )
+    identity = ProviderCallIdentity(
+        id="call",
+        review_run_id="run",
+        call_kind="initial",
+        call_ordinal=1,
+        provider_id="anthropic",
+        model_profile_id="review-default",
+        model_profile_version="1",
+        prompt_version="review-v1",
+        schema_version="review-v1",
+    )
+    await store.reviews.reserve_call(identity, now)
+    with pytest.raises(PersistenceIntegrityError, match="illegal provider-call"):
+        await store.reviews.transition_call(
+            "call", ProviderCallState.RESERVED, ProviderCallState.COMPLETED, now
+        )
+    operation = await store.reviews.reserve_write_operation(
+        "check_run",
+        operation_id="operation",
+        run_id="run",
+        head_sha="head",
+        external_id="check",
+        now=now,
+    )
+    with pytest.raises(PersistenceIntegrityError, match="illegal write-operation"):
+        await store.reviews.transition_write_operation(
+            "check_run",
+            operation.id,
+            WriteOperationState.RESERVED_UNATTEMPTED,
+            WriteOperationState.COMPLETED,
+            now,
+            provider_id="1",
+        )

@@ -65,7 +65,14 @@ async def test_complete_zero_and_last_page_exact_check_match(
     last = '<https://api.github.com/next>; rel="next"'
     fake = FakeClient(
         [
-            response({"check_runs": []}, link=last),
+            response({"check_suites": []}, link=last),
+            response(
+                {
+                    "check_suites": [
+                        {"id": 5, "app": {"id": 7}},
+                    ]
+                }
+            ),
             response(
                 {
                     "check_runs": [
@@ -81,12 +88,12 @@ async def test_complete_zero_and_last_page_exact_check_match(
             ),
         ]
     )
-    writer = GitHubReviewWriter(cast(GitHubClient, fake), 7, max_pages=2)
+    writer = GitHubReviewWriter(cast(GitHubClient, fake), 7, max_pages=3)
     result = await writer.reconcile_check_run(
         github_target, head_sha="head", external_id="external"
     )
     assert result.collection_complete
-    assert result.pages_inspected == 2
+    assert result.pages_inspected == 3
     assert result.provider_ids == ("9",)
 
 
@@ -95,7 +102,7 @@ async def test_page_cap_is_incomplete_and_zero_is_not_actionable(
     github_target: ChangeRequestTarget,
 ) -> None:
     fake = FakeClient(
-        [response({"check_runs": []}, link='<https://api.github.com/next>; rel="next"')]
+        [response({"check_suites": []}, link='<https://api.github.com/next>; rel="next"')]
     )
     writer = GitHubReviewWriter(cast(GitHubClient, fake), 7, max_pages=1)
     result = await writer.reconcile_check_run(
@@ -136,3 +143,81 @@ async def test_review_post_pins_comment_event_commit_and_right_anchor(
     assert payload["commit_id"] == "validated-head"
     comments = cast(list[dict[str, object]], payload["comments"])
     assert comments[0]["side"] == "RIGHT"
+
+
+@pytest.mark.asyncio
+async def test_check_suite_complete_zero_is_actionable(
+    github_target: ChangeRequestTarget,
+) -> None:
+    writer = GitHubReviewWriter(
+        cast(GitHubClient, FakeClient([response({"total_count": 0, "check_suites": []})])),
+        7,
+    )
+    result = await writer.reconcile_check_run(
+        github_target, head_sha="head", external_id="external"
+    )
+    assert result.actionable_zero and result.collection_complete
+
+
+@pytest.mark.asyncio
+async def test_check_suite_multiple_matches_are_fully_enumerated(
+    github_target: ChangeRequestTarget,
+) -> None:
+    fake = FakeClient(
+        [
+            response({"total_count": 1, "check_suites": [{"id": 5, "app": {"id": 7}}]}),
+            response(
+                {
+                    "total_count": 2,
+                    "check_runs": [
+                        {
+                            "id": value,
+                            "name": "Revio review",
+                            "external_id": "external",
+                            "head_sha": "head",
+                            "app": {"id": 7},
+                        }
+                        for value in (9, 10)
+                    ],
+                }
+            ),
+        ]
+    )
+    result = await GitHubReviewWriter(cast(GitHubClient, fake), 7).reconcile_check_run(
+        github_target, head_sha="head", external_id="external"
+    )
+    assert result.collection_complete and result.provider_ids == ("9", "10")
+
+
+@pytest.mark.asyncio
+async def test_provider_truncated_suite_collection_is_not_actionable(
+    github_target: ChangeRequestTarget,
+) -> None:
+    fake = FakeClient([response({"total_count": 2, "check_suites": []})])
+    result = await GitHubReviewWriter(cast(GitHubClient, fake), 7).reconcile_check_run(
+        github_target, head_sha="head", external_id="external"
+    )
+    assert result.provider_limit_reached and not result.actionable_zero
+
+
+@pytest.mark.asyncio
+async def test_service_item_limit_across_suites_is_not_complete(
+    github_target: ChangeRequestTarget,
+) -> None:
+    fake = FakeClient(
+        [
+            response(
+                {
+                    "total_count": 2,
+                    "check_suites": [
+                        {"id": 5, "app": {"id": 7}},
+                        {"id": 6, "app": {"id": 7}},
+                    ],
+                }
+            )
+        ]
+    )
+    result = await GitHubReviewWriter(cast(GitHubClient, fake), 7, max_items=1).reconcile_check_run(
+        github_target, head_sha="head", external_id="external"
+    )
+    assert result.service_limit_reached and not result.collection_complete

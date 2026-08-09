@@ -100,6 +100,9 @@ class ReviewRepository(Protocol):
         self, identity: ProviderCallIdentity, now: datetime
     ) -> ProviderCallRecord: ...
     async def get_call(self, call_id: str) -> ProviderCallRecord | None: ...
+    async def latest_call(
+        self, run_id: str, call_kind: Literal["initial", "repair"]
+    ) -> ProviderCallRecord | None: ...
     async def transition_call(
         self,
         call_id: str,

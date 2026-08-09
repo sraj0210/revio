@@ -52,6 +52,7 @@ class PartialReason(StrEnum):
     ANCHOR_RACE = "anchor_race"
     PUBLICATION_INDETERMINATE = "publication_indeterminate"
     SUPERSEDED = "superseded"
+    FINDINGS_TRUNCATED = "findings_truncated"
 
 
 class DiffEnvelope(BaseModel):

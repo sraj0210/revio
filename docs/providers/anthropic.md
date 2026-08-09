@@ -10,3 +10,9 @@ Configure exactly one of `REVIO_ANTHROPIC_API_KEY` or an absolute
 `REVIO_ANTHROPIC_API_KEY_FILE`. Review execution is separately gated by
 `REVIO_REVIEW_ENABLED`. Exact normalized usage comes only from observed Messages responses; an
 ambiguous attempt records unknown usage and is never retransmitted.
+
+Token-count failures occur before Messages and are classified as safe preflight retry or terminal
+preflight rejection. Messages connection failure before acceptance and explicit 429/529 responses
+may use a new durable ProviderCall ordinal; timeout, read-loss, and 5xx ambiguity never does.
+Refusal, `max_tokens`, and terminal 4xx responses become deterministic neutral artifacts and never
+escape the worker. Repair has an independent ordinal sequence and the same no-retransmission rule.

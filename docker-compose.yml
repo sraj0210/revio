@@ -4,6 +4,7 @@ services:
       context: .
     command: ["/app/.venv/bin/revio-db", "upgrade"]
     environment: &revio-environment
+      REVIO_ENVIRONMENT: ${REVIO_ENVIRONMENT:-local}
       REVIO_DATABASE_PATH: /var/lib/revio/revio.db
       REVIO_GITHUB_ENABLED: ${REVIO_GITHUB_ENABLED:-false}
       REVIO_GITHUB_ALLOW_IDLE_WORKER: ${REVIO_GITHUB_ALLOW_IDLE_WORKER:-false}

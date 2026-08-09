@@ -5,6 +5,7 @@ import asyncio
 import signal
 import socket
 import sys
+from typing import cast
 
 from revio.adapters.ai.anthropic import AnthropicReviewAdapter, anthropic_model_profile
 from revio.adapters.persistence.sqlite import SQLiteStore
@@ -22,7 +23,19 @@ from revio.config.database import DatabaseSettings
 from revio.config.github import GitHubSettings
 from revio.config.queue import QueueSettings
 from revio.config.review import ReviewSettings
-from revio.registries import ProviderRegistry
+from revio.domain.capabilities import ResolvedModelProfile
+from revio.domain.identifiers import ModelAlias
+from revio.registries import ModelRegistry, ProviderRegistry
+
+
+def resolve_review_profile(settings: ReviewSettings):
+    models = ModelRegistry()
+    models.register(anthropic_model_profile())
+    alias = settings.review_model_alias or settings.review_fallback_alias
+    profile = models.resolve(ModelAlias(value=alias))
+    if "diff_only" not in profile.allowed_review_modes:
+        raise ValueError("resolved review model does not support diff_only")
+    return profile
 
 
 async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
@@ -43,6 +56,9 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
         AnthropicReviewAdapter(anthropic_settings, review_settings)
         if review_settings.review_enabled
         else None
+    )
+    review_profile = (
+        resolve_review_profile(review_settings) if review_settings.review_enabled else None
     )
     if github is None and not github_settings.github_allow_idle_worker:
         raise ValueError("worker requires an enabled provider adapter")
@@ -75,6 +91,8 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                 providers = ProviderRegistry()
                 providers.register_scm(GITHUB_PROVIDER_ID, github.bundle)
                 credential_cache = GitHubCredentialCache(github.token_cache)
+                if anthropic is not None and review_profile is None:
+                    raise RuntimeError("review model profile was not resolved")
                 processor = QueueProcessor(
                     store,
                     providers,
@@ -86,7 +104,7 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                             store.reviews,
                             github.adapter,
                             ReviewGenerationService(store.reviews, anthropic, review_settings),
-                            anthropic_model_profile(),
+                            cast(ResolvedModelProfile, review_profile),
                             review_settings,
                             writer=github.writer,
                             marker_key=active_marker_key,

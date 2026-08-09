@@ -87,6 +87,7 @@ class Finding(BaseModel):
     confidence: float = Field(ge=0, le=1)
     path: str
     line: int | None = Field(default=None, gt=0)
+    inline_eligible: bool = False
 
     @property
     def is_inline(self) -> bool:

@@ -153,26 +153,21 @@ class GitHubClient:
         from revio.adapters.scm.github.errors import GitHubAmbiguousWriteError
 
         current_path = self.relative_url(path)
-        for auth_attempt in range(2):
-            token = await self._cache.get(installation_id, self._refresh)
-            try:
-                response = await self._http.request(
-                    method,
-                    current_path,
-                    json=json_body,
-                    headers={"Authorization": f"Bearer {token.get_secret_value()}"},
-                    follow_redirects=False,
-                )
-            except (httpx.TimeoutException, httpx.HTTPError):
-                raise GitHubAmbiguousWriteError("GitHub write outcome is ambiguous") from None
-            if response.status_code in {301, 302, 307, 308}:
-                raise GitHubAmbiguousWriteError("GitHub write redirect is ambiguous")
-            if response.status_code == 401 and auth_attempt == 0:
-                await self._cache.invalidate(installation_id)
-                continue
-            self.raise_for_response(response)
-            return response
-        raise GitHubAuthenticationError("GitHub authentication failed")
+        token = await self._cache.get(installation_id, self._refresh)
+        try:
+            response = await self._http.request(
+                method,
+                current_path,
+                json=json_body,
+                headers={"Authorization": f"Bearer {token.get_secret_value()}"},
+                follow_redirects=False,
+            )
+        except (httpx.TimeoutException, httpx.HTTPError):
+            raise GitHubAmbiguousWriteError("GitHub write outcome is ambiguous") from None
+        if response.status_code in {301, 302, 307, 308, 401} or response.status_code >= 500:
+            raise GitHubAmbiguousWriteError("GitHub write response is ambiguous")
+        self.raise_for_response(response)
+        return response
 
     @staticmethod
     def _retry_after(response: httpx.Response) -> float | None:

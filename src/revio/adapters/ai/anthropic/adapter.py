@@ -16,6 +16,8 @@ from revio.errors import (
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
     ProviderCallRejectedError,
+    ProviderCallSafeRetryError,
+    ProviderCallTerminalError,
     ProviderTransientError,
 )
 
@@ -91,7 +93,10 @@ def anthropic_model_profile() -> ResolvedModelProfile:
 
 def _load_key(settings: AnthropicSettings) -> str:
     if settings.anthropic_api_key is not None:
-        return settings.anthropic_api_key.get_secret_value()
+        value = settings.anthropic_api_key.get_secret_value()
+        if not value or len(value.encode()) > 16_384:
+            raise ValueError("Anthropic API key has an invalid size")
+        return value
     path = settings.anthropic_api_key_file
     if path is None:
         raise ValueError("Anthropic API key is unavailable")
@@ -170,18 +175,15 @@ class AnthropicReviewAdapter:
             "output_config": {"format": {"type": "json_schema", "schema": REVIEW_JSON_SCHEMA}},
         }
 
-    async def _post(self, path: str, payload: dict[str, Any]) -> httpx.Response:
+    async def _post_count(self, payload: dict[str, Any]) -> httpx.Response:
         try:
-            response = await self._http.post(path, json=payload, follow_redirects=False)
-        except httpx.ConnectError as error:
-            raise ProviderTransientError("Anthropic connection failed before acceptance") from error
-        except (
-            httpx.TimeoutException,
-            httpx.WriteError,
-            httpx.ReadError,
-            httpx.RemoteProtocolError,
-        ):
-            raise ProviderCallAmbiguousError("Anthropic call outcome is ambiguous") from None
+            response = await self._http.post(
+                "/v1/messages/count_tokens", json=payload, follow_redirects=False
+            )
+        except httpx.HTTPError:
+            raise ProviderTransientError(
+                "Anthropic token count is temporarily unavailable"
+            ) from None
         if response.status_code in {429, 529}:
             retry_after = response.headers.get("retry-after")
             try:
@@ -189,24 +191,55 @@ class AnthropicReviewAdapter:
             except ValueError:
                 retry_seconds = None
             raise ProviderTransientError(
-                "Anthropic temporarily rejected the request", retry_after_seconds=retry_seconds
+                "Anthropic token count is temporarily unavailable",
+                retry_after_seconds=retry_seconds,
             )
         if response.status_code >= 500:
-            raise ProviderCallAmbiguousError("Anthropic call outcome is ambiguous")
+            raise ProviderTransientError("Anthropic token count is temporarily unavailable")
         if response.status_code >= 400:
-            raise ProviderCallRejectedError("Anthropic rejected the request")
+            raise ProviderCallTerminalError("Anthropic token count was rejected")
+        return response
+
+    async def _post_messages(self, payload: dict[str, Any]) -> httpx.Response:
+        try:
+            response = await self._http.post("/v1/messages", json=payload, follow_redirects=False)
+        except httpx.ConnectError as error:
+            raise ProviderCallSafeRetryError(
+                "Anthropic connection failed before acceptance"
+            ) from error
+        except (
+            httpx.TimeoutException,
+            httpx.WriteError,
+            httpx.ReadError,
+            httpx.RemoteProtocolError,
+        ):
+            raise ProviderCallAmbiguousError("Anthropic Messages outcome is ambiguous") from None
+        if response.status_code in {429, 529}:
+            retry_after = response.headers.get("retry-after")
+            try:
+                retry_seconds = float(retry_after) if retry_after else None
+            except ValueError:
+                retry_seconds = None
+            raise ProviderCallSafeRetryError(
+                "Anthropic explicitly rejected Messages for retry",
+                retry_after_seconds=retry_seconds,
+            )
+        if response.status_code >= 500:
+            raise ProviderCallAmbiguousError("Anthropic Messages outcome is ambiguous")
+        if response.status_code >= 400:
+            raise ProviderCallTerminalError("Anthropic Messages request was rejected")
         return response
 
     async def _count(self, payload: dict[str, Any]) -> int:
         count_payload = {key: value for key, value in payload.items() if key != "max_tokens"}
-        response = await self._post("/v1/messages/count_tokens", count_payload)
+        response = await self._post_count(count_payload)
         try:
             count = cast(dict[str, Any], response.json())["input_tokens"]
             if not isinstance(count, int) or count < 0:
                 raise ValueError
             return count
         except (ValueError, TypeError, KeyError):
-            raise ProviderCallRejectedError("Anthropic token count response is invalid") from None
+            raise ProviderCallTerminalError("Anthropic token count response is invalid") from None
 
     async def preflight(self, request: ReviewRequest) -> dict[str, Any]:
         payload = self._payload(request)
@@ -216,7 +249,7 @@ class AnthropicReviewAdapter:
         return payload
 
     async def generate_preflighted(self, payload: dict[str, Any]) -> ReviewResult:
-        response = await self._post("/v1/messages", payload)
+        response = await self._post_messages(payload)
         try:
             body = cast(dict[str, Any], response.json())
             raw_usage = cast(dict[str, Any], body["usage"])
@@ -228,13 +261,13 @@ class AnthropicReviewAdapter:
             )
             stop_reason = body.get("stop_reason")
             if stop_reason in {"refusal", "max_tokens"}:
-                raise ProviderCallRejectedError(f"Anthropic stopped with {stop_reason}")
+                raise ProviderCallTerminalError(f"Anthropic stopped with {stop_reason}")
             blocks = cast(list[dict[str, Any]], body["content"])
             texts = [block["text"] for block in blocks if block.get("type") == "text"]
             if len(texts) != 1:
                 raise ValueError
             parsed = _ReviewDTO.model_validate_json(texts[0])
-        except ProviderCallRejectedError:
+        except (ProviderCallRejectedError, ProviderCallTerminalError):
             raise
         except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             observed_usage = locals().get("usage")
@@ -256,8 +289,9 @@ class AnthropicReviewAdapter:
             {
                 "role": "user",
                 "content": (
-                    "The previous response failed local validation. Generate the review again and "
-                    "strictly satisfy the same JSON schema."
+                    "Validation reason=structured_output_invalid; prompt_version=review-v1; "
+                    "schema_version=review-v1. Generate the review again and strictly satisfy "
+                    "the same JSON schema."
                 ),
             }
         )

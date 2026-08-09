@@ -17,16 +17,16 @@ from revio.domain.reviews import ReconciliationResult, ReviewStatusDetails
 _MARKER = re.compile(r"<!-- revio:v1:review:[A-Za-z0-9_-]{24} -->")
 
 
-def _list(response: httpx.Response) -> list[dict[str, Any]]:
+def _list(response: httpx.Response, key: str | None = None) -> list[dict[str, Any]]:
     try:
         value = cast(object, response.json())
     except ValueError:
         raise GitHubResponseError("invalid GitHub reconciliation response") from None
     if isinstance(value, dict):
         mapping = cast(dict[object, object], value)
-        check_runs = mapping.get("check_runs")
-        if isinstance(check_runs, list):
-            value = cast(list[object], check_runs)
+        nested = mapping.get(key) if key is not None else None
+        if isinstance(nested, list):
+            value = cast(list[object], nested)
     if not isinstance(value, list):
         raise GitHubResponseError("invalid GitHub reconciliation response")
     values = cast(list[object], value)
@@ -79,35 +79,92 @@ class GitHubReviewWriter:
     ) -> ReconciliationResult:
         installation, root, _ = self._target(target)
         pages = 0
+        inspected = 0
+        provider_truncated = False
+        suite_seen = 0
 
-        def parse(response: httpx.Response) -> list[dict[str, Any]]:
-            nonlocal pages
+        def parse_suites(response: httpx.Response) -> list[dict[str, Any]]:
+            nonlocal pages, provider_truncated, suite_seen
             pages += 1
-            return _list(response)
+            values = _list(response, "check_suites")
+            suite_seen += len(values)
+            body = cast(dict[str, Any], response.json())
+            total = body.get("total_count")
+            if isinstance(total, int) and total > suite_seen and "next" not in response.links:
+                provider_truncated = True
+            return values
 
-        items, completeness = await collect_pages(
+        suites, completeness = await collect_pages(
             self._client,
             installation,
-            f"{root}/commits/{head_sha}/check-runs",
+            f"{root}/commits/{head_sha}/check-suites",
             params={"filter": "all", "per_page": 100},
-            parse=parse,
+            parse=parse_suites,
             max_pages=self._max_pages,
             max_items=self._max_items,
         )
         matches: list[str] = []
-        for item in items:
-            app = cast(object, item.get("app"))
-            if (
-                item.get("name") == name
-                and item.get("external_id") == external_id
-                and isinstance(app, dict)
+        inspected += len(suites)
+        status = "provider_truncated" if provider_truncated else completeness.status
+        for suite in suites:
+            app = suite.get("app")
+            suite_id = suite.get("id")
+            if not (
+                isinstance(app, dict)
                 and cast(dict[object, object], app).get("id") == self._app_id
-                and str(item.get("head_sha", head_sha)) == head_sha
+                and isinstance(suite_id, int | str)
             ):
-                identifier = item.get("id")
-                if isinstance(identifier, int | str):
-                    matches.append(str(identifier))
-        return self._reconciliation(matches, completeness.status, pages, len(items))
+                continue
+            remaining_pages = self._max_pages - pages
+            remaining_items = self._max_items - inspected
+            if remaining_pages <= 0:
+                status = "service_page_limit"
+                break
+            if remaining_items <= 0:
+                status = "service_item_limit"
+                break
+
+            run_truncated = False
+            run_seen = 0
+
+            def parse_runs(response: httpx.Response) -> list[dict[str, Any]]:
+                nonlocal pages, run_truncated, run_seen
+                pages += 1
+                values = _list(response, "check_runs")
+                run_seen += len(values)
+                body = cast(dict[str, Any], response.json())
+                total = body.get("total_count")
+                if isinstance(total, int) and total > run_seen and "next" not in response.links:
+                    run_truncated = True
+                return values
+
+            runs, run_completeness = await collect_pages(
+                self._client,
+                installation,
+                f"{root}/check-suites/{suite_id}/check-runs",
+                params={"filter": "all", "per_page": 100},
+                parse=parse_runs,
+                max_pages=remaining_pages,
+                max_items=remaining_items,
+            )
+            inspected += len(runs)
+            if run_truncated:
+                status = "provider_truncated"
+            elif run_completeness.status != "complete" and status == "complete":
+                status = run_completeness.status
+            for item in runs:
+                run_app = item.get("app")
+                if (
+                    item.get("name") == name
+                    and item.get("external_id") == external_id
+                    and isinstance(run_app, dict)
+                    and cast(dict[object, object], run_app).get("id") == self._app_id
+                    and str(item.get("head_sha", head_sha)) == head_sha
+                ):
+                    identifier = item.get("id")
+                    if isinstance(identifier, int | str):
+                        matches.append(str(identifier))
+        return self._reconciliation(matches, status, pages, inspected)
 
     async def create_check_run(
         self, target: ChangeRequestTarget, details: ReviewStatusDetails
@@ -201,7 +258,9 @@ class GitHubReviewWriter:
             if line.new_line is not None and line.side in {"new", "context"}
         }
         return tuple(
-            item for item in findings if item.line is not None and (item.path, item.line) in valid
+            item
+            for item in findings
+            if item.inline_eligible and item.line is not None and (item.path, item.line) in valid
         )
 
     async def publish_review(
@@ -219,7 +278,7 @@ class GitHubReviewWriter:
                 "path": finding.path,
                 "line": finding.line,
                 "side": "RIGHT",
-                "body": f"**{finding.title}**\n\n{finding.explanation}",
+                "body": f"**{finding.title}**\n\n{finding.explanation}"[:4000],
             }
             for finding in findings
             if finding.line is not None
@@ -231,7 +290,7 @@ class GitHubReviewWriter:
             json_body={
                 "event": "COMMENT",
                 "commit_id": commit_id,
-                "body": f"{summary}\n\n{marker}",
+                "body": f"{summary[:8000]}\n\n{marker}",
                 "comments": comments,
             },
         )

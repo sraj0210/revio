@@ -11,7 +11,12 @@ from revio.adapters.ai.anthropic import AnthropicReviewAdapter, anthropic_model_
 from revio.config.anthropic import AnthropicSettings
 from revio.config.review import ReviewSettings
 from revio.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewRequest
-from revio.errors import ProviderCallAmbiguousError
+from revio.errors import (
+    ProviderCallAmbiguousError,
+    ProviderCallSafeRetryError,
+    ProviderCallTerminalError,
+    ProviderTransientError,
+)
 
 
 @pytest.mark.asyncio
@@ -122,3 +127,102 @@ async def test_messages_timeout_is_ambiguous(change_request: ChangeRequest) -> N
         await adapter.review(request)
     assert calls == 2
     await http.aclose()
+
+
+def _request(change_request: ChangeRequest) -> ReviewRequest:
+    return ReviewRequest(
+        change_request=change_request,
+        diff_files=(),
+        model_profile=anthropic_model_profile(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["timeout", "429", "529"])
+async def test_token_count_availability_failures_are_safe_preflight_retries(
+    change_request: ChangeRequest, outcome: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if outcome == "timeout":
+            raise httpx.ReadTimeout("count timeout", request=request)
+        return httpx.Response(int(outcome))
+
+    http = httpx.AsyncClient(
+        base_url="https://api.anthropic.com", transport=httpx.MockTransport(handler)
+    )
+    adapter = AnthropicReviewAdapter(
+        AnthropicSettings(anthropic_enabled=True, anthropic_api_key=SecretStr("secret")),
+        ReviewSettings(review_enabled=True),
+        http=http,
+    )
+    with pytest.raises(ProviderTransientError):
+        await adapter.preflight(_request(change_request))
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [429, 529])
+async def test_messages_explicit_retry_rejection_is_not_ambiguous(
+    change_request: ChangeRequest, status: int
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("count_tokens"):
+            return httpx.Response(200, json={"input_tokens": 1})
+        return httpx.Response(status)
+
+    http = httpx.AsyncClient(
+        base_url="https://api.anthropic.com",
+        transport=httpx.MockTransport(handler),
+    )
+    adapter = AnthropicReviewAdapter(
+        AnthropicSettings(anthropic_enabled=True, anthropic_api_key=SecretStr("secret")),
+        ReviewSettings(review_enabled=True),
+        http=http,
+    )
+    payload = await adapter.preflight(_request(change_request))
+    with pytest.raises(ProviderCallSafeRetryError):
+        await adapter.generate_preflighted(payload)
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_reason", ["refusal", "max_tokens"])
+async def test_refusal_and_max_tokens_are_terminal_generation_outcomes(
+    change_request: ChangeRequest, stop_reason: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("count_tokens"):
+            return httpx.Response(200, json={"input_tokens": 1})
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": stop_reason,
+                "content": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    http = httpx.AsyncClient(
+        base_url="https://api.anthropic.com",
+        transport=httpx.MockTransport(handler),
+    )
+    adapter = AnthropicReviewAdapter(
+        AnthropicSettings(anthropic_enabled=True, anthropic_api_key=SecretStr("secret")),
+        ReviewSettings(review_enabled=True),
+        http=http,
+    )
+    payload = await adapter.preflight(_request(change_request))
+    with pytest.raises(ProviderCallTerminalError):
+        await adapter.generate_preflighted(payload)
+    await http.aclose()
+
+
+def test_direct_anthropic_key_has_same_size_limit_as_file_key() -> None:
+    with pytest.raises(ValueError, match="invalid size"):
+        AnthropicReviewAdapter(
+            AnthropicSettings(
+                anthropic_enabled=True,
+                anthropic_api_key=SecretStr("x" * 16_385),
+            ),
+            ReviewSettings(review_enabled=True),
+        )

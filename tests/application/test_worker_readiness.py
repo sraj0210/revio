@@ -29,6 +29,11 @@ def _configure_database(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
     monkeypatch.delenv("REVIO_ENVIRONMENT", raising=False)
     monkeypatch.delenv("REVIO_GITHUB_WEBHOOK_MODE", raising=False)
     monkeypatch.delenv("REVIO_GITHUB_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("REVIO_REVIEW_ENABLED", raising=False)
+    monkeypatch.delenv("REVIO_REVIEW_PUBLISH_ENABLED", raising=False)
+    monkeypatch.delenv("REVIO_PUBLISH_MARKER_KEY", raising=False)
+    monkeypatch.delenv("REVIO_ANTHROPIC_ENABLED", raising=False)
+    monkeypatch.delenv("REVIO_ANTHROPIC_API_KEY", raising=False)
 
 
 @pytest.mark.asyncio
@@ -101,6 +106,32 @@ async def test_valid_worker_readiness_is_network_free_and_does_not_lease(
 
 
 @pytest.mark.asyncio
+async def test_no_secret_phase4_sandbox_composition_is_network_free(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    rsa_private_key_pem: str,
+) -> None:
+    path = tmp_path / "revio.db"
+    await _database(path)
+    _configure_database(monkeypatch, path)
+    monkeypatch.setenv("REVIO_ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("REVIO_GITHUB_ENABLED", "true")
+    monkeypatch.setenv("REVIO_GITHUB_APP_ID", "1")
+    monkeypatch.setenv("REVIO_GITHUB_PRIVATE_KEY", rsa_private_key_pem)
+    monkeypatch.setenv("REVIO_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("REVIO_REVIEW_PUBLISH_ENABLED", "true")
+    monkeypatch.setenv("REVIO_PUBLISH_MARKER_KEY", "m" * 32)
+    monkeypatch.setenv("REVIO_ANTHROPIC_ENABLED", "true")
+    monkeypatch.setenv("REVIO_ANTHROPIC_API_KEY", "test-only-not-a-real-secret")
+
+    async def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("composition readiness must remain network-free")
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", forbidden)
+    assert await run_worker(True) == 0
+
+
+@pytest.mark.asyncio
 async def test_disabled_worker_is_unready_without_explicit_local_idle_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -136,6 +167,21 @@ async def test_disabled_worker_is_unready_in_operational_modes(
         monkeypatch.setenv("REVIO_GITHUB_WEBHOOK_MODE", "durable")
         monkeypatch.setenv("REVIO_GITHUB_WEBHOOK_SECRET", "secret")
     with pytest.raises((ValidationError, ValueError)):
+        await run_worker(True)
+
+
+@pytest.mark.asyncio
+async def test_worker_runtime_rejects_production_review_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "revio.db"
+    await _database(path)
+    _configure_database(monkeypatch, path)
+    monkeypatch.setenv("REVIO_ENVIRONMENT", "production")
+    monkeypatch.setenv("REVIO_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("REVIO_REVIEW_PUBLISH_ENABLED", "true")
+    monkeypatch.setenv("REVIO_PUBLISH_MARKER_KEY", "x" * 32)
+    with pytest.raises(ValidationError, match="forbidden in production"):
         await run_worker(True)
 
 

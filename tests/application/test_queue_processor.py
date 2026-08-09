@@ -19,7 +19,12 @@ from revio.domain.capabilities import SCMCapabilities
 from revio.domain.identifiers import ChangeRequestTarget, InstallationRef
 from revio.domain.models import ChangeRequest, DiffCollection
 from revio.domain.queue import JobLease
-from revio.errors import LeaseLostError, PersistenceUnavailableError
+from revio.errors import (
+    LeaseLostError,
+    PersistenceUnavailableError,
+    ProviderCallTerminalError,
+    ProviderWriteRejectedError,
+)
 from revio.registries import ProviderRegistry, SCMAdapterBundle
 
 
@@ -122,6 +127,16 @@ def _processor(store: SQLiteStore) -> tuple[QueueProcessor, RecordingReader, Rec
         SCMAdapterBundle(reader=reader, capabilities=SCMCapabilities()),
     )
     return QueueProcessor(store, providers, cache, QueueSettings()), reader, cache
+
+
+class FailingReviewExecutor:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def execute(
+        self, lease: JobLease, current: ChangeRequest, *, now: datetime | None = None
+    ) -> str:
+        raise self.error
 
 
 @pytest.mark.asyncio
@@ -351,6 +366,36 @@ async def test_retry_exhaustion_uses_total_lease_count(tmp_path: Path) -> None:
     reader.get_change_request = transient
     await processor.process(lease)
     assert (await store.status())["dead"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [ProviderCallTerminalError("refusal"), ProviderWriteRejectedError("GitHub rejection")],
+)
+async def test_expected_review_provider_failures_never_escape_worker_processing(
+    tmp_path: Path, error: Exception
+) -> None:
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"))
+    await store.initialize()
+    await _job(store)
+    lease = await store.lease_next("worker", datetime.now(UTC))
+    assert lease is not None
+    _, reader, cache = _processor(store)
+    providers = ProviderRegistry()
+    providers.register_scm(
+        GITHUB_PROVIDER_ID,
+        SCMAdapterBundle(reader=reader, capabilities=SCMCapabilities()),
+    )
+    processor = QueueProcessor(
+        store,
+        providers,
+        cache,
+        QueueSettings(),
+        review_executor=FailingReviewExecutor(error),
+    )
+    await processor.process(lease)
+    assert reader.reads and (await store.status())["dead"] == 1
 
 
 @pytest.mark.asyncio

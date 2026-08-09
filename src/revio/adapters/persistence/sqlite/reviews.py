@@ -88,6 +88,28 @@ class SQLiteReviewRepository:
         *,
         reason: str | None = None,
     ) -> bool:
+        allowed = {
+            ReviewRunState.GENERATION_PENDING: {
+                ReviewRunState.GENERATION_ATTEMPTED,
+                ReviewRunState.ARTIFACT_DURABLE,
+                ReviewRunState.CHECK_RUN_INDETERMINATE,
+            },
+            ReviewRunState.GENERATION_ATTEMPTED: {ReviewRunState.ARTIFACT_DURABLE},
+            ReviewRunState.ARTIFACT_DURABLE: {
+                ReviewRunState.PUBLISHING,
+                ReviewRunState.COMPLETED,
+                ReviewRunState.PARTIAL,
+            },
+            ReviewRunState.PUBLISHING: {
+                ReviewRunState.COMPLETED,
+                ReviewRunState.PARTIAL,
+                ReviewRunState.SUPERSEDED,
+                ReviewRunState.PUBLICATION_INDETERMINATE,
+            },
+        }
+        if target not in allowed.get(expected, set()):
+            raise PersistenceIntegrityError("illegal review-run state transition")
+
         async def operation(connection: aiosqlite.Connection) -> bool:
             cursor = await connection.execute(
                 "UPDATE review_runs SET state=?, terminal_reason=?, updated_at=? "
@@ -131,7 +153,7 @@ class SQLiteReviewRepository:
                     (identity.review_run_id, identity.call_kind, identity.call_ordinal),
                 )
             ).fetchone()
-            if row is None or row["id"] != identity.id:
+            if row is None or self._call(row).identity != identity:
                 raise PersistenceIntegrityError("provider call identity conflict")
             return self._call(row)
 
@@ -166,6 +188,21 @@ class SQLiteReviewRepository:
 
         return await self._connections.read(operation)
 
+    async def latest_call(
+        self, run_id: str, call_kind: Literal["initial", "repair"]
+    ) -> ProviderCallRecord | None:
+        async def operation(connection: aiosqlite.Connection) -> ProviderCallRecord | None:
+            row = await (
+                await connection.execute(
+                    "SELECT * FROM provider_calls WHERE review_run_id=? AND call_kind=? "
+                    "ORDER BY call_ordinal DESC LIMIT 1",
+                    (run_id, call_kind),
+                )
+            ).fetchone()
+            return self._call(row) if row is not None else None
+
+        return await self._connections.read(operation)
+
     async def transition_call(
         self,
         call_id: str,
@@ -175,6 +212,18 @@ class SQLiteReviewRepository:
         *,
         usage: UsageDisposition | None = None,
     ) -> bool:
+        allowed = {
+            ProviderCallState.RESERVED: {ProviderCallState.ATTEMPT_STARTED},
+            ProviderCallState.ATTEMPT_STARTED: {
+                ProviderCallState.RESPONSE_OBSERVED,
+                ProviderCallState.AMBIGUOUS,
+                ProviderCallState.KNOWN_REJECTED,
+            },
+            ProviderCallState.RESPONSE_OBSERVED: {ProviderCallState.COMPLETED},
+        }
+        if target not in allowed.get(expected, set()):
+            raise PersistenceIntegrityError("illegal provider-call state transition")
+
         async def operation(connection: aiosqlite.Connection) -> bool:
             cursor = await connection.execute(
                 "UPDATE provider_calls SET state=?, updated_at=? WHERE id=? AND state=?",
@@ -380,6 +429,16 @@ class SQLiteReviewRepository:
             ).fetchone()
             if row is None or row["id"] != operation_id:
                 raise PersistenceIntegrityError("write operation identity conflict")
+            if row["head_sha"] != head_sha:
+                raise PersistenceIntegrityError("write operation head identity conflict")
+            if kind == "check_run" and row["external_id"] != external_id:
+                raise PersistenceIntegrityError("Check Run operation identity conflict")
+            if kind == "publish" and (
+                row["operation_key"] != operation_key
+                or row["marker"] != marker
+                or row["marker_key_id"] != marker_key_id
+            ):
+                raise PersistenceIntegrityError("publish operation identity conflict")
             return self._write_record(kind, row)
 
         return await self._connections.write(operation)
@@ -415,6 +474,34 @@ class SQLiteReviewRepository:
         terminal_reason: str | None = None,
         increment_attempt: bool = False,
     ) -> bool:
+        allowed = {
+            WriteOperationState.RESERVED_UNATTEMPTED: {
+                WriteOperationState.ATTEMPT_STARTED,
+                WriteOperationState.RECONCILED,
+                WriteOperationState.INTEGRITY_FAILED,
+            },
+            WriteOperationState.ATTEMPT_STARTED: {
+                WriteOperationState.KNOWN_REJECTED,
+                WriteOperationState.AMBIGUOUS,
+                WriteOperationState.COMPLETED,
+            },
+            WriteOperationState.AMBIGUOUS: {
+                WriteOperationState.RECONCILED,
+                WriteOperationState.INTEGRITY_FAILED,
+            },
+            WriteOperationState.KNOWN_REJECTED: {
+                WriteOperationState.ATTEMPT_STARTED,
+                WriteOperationState.RECONCILED,
+                WriteOperationState.INTEGRITY_FAILED,
+            },
+        }
+        if target not in allowed.get(expected, set()):
+            raise PersistenceIntegrityError("illegal write-operation state transition")
+        if (
+            target in {WriteOperationState.COMPLETED, WriteOperationState.RECONCILED}
+            and not provider_id
+        ):
+            raise PersistenceIntegrityError("terminal provider write requires provider identity")
         table = "check_run_operations" if kind == "check_run" else "publish_operations"
         provider_column = "provider_check_run_id" if kind == "check_run" else "provider_review_id"
 

@@ -42,4 +42,6 @@ def load_marker_key(settings: ReviewSettings) -> bytes:
         raise ValueError("marker key is unavailable")
     if len(value) < 32:
         raise ValueError("marker key must contain at least 32 bytes")
+    if len(value) > 16_384:
+        raise ValueError("marker key is too large")
     return value

@@ -27,6 +27,13 @@ constraints. A complete zero-match search authorizes only an unattempted first P
 ambiguous write, Revio reconciles and never reposts from zero matches. Only an explicit non-creating
 anchor rejection permits one same-head summary-only fallback.
 
+Check Run reconciliation enumerates every Check Suite for the exact head and every Check Run in
+each Revio-App suite under shared page and item ceilings. A match is unique, or a zero is actionable,
+only when that entire hierarchy is complete. Write timeouts, redirects, all 5xx responses, and 401
+responses are ambiguous: the client does not refresh credentials and repeat the write. It reconciles
+the stable Check Run identity or review marker instead. A 401 response is not assumed to prove that
+the provider had no effect.
+
 ## Partial data
 
 Changed-file and tree collections carry a completeness value: `complete`, `provider_truncated`, `service_page_limit`, or `service_item_limit`. Exact duplicate changed-file entries are deduplicated, conflicting duplicates fail safely, and completeness uses the unique validated file count. Each changed file separately reports `complete`, `missing`, `malformed`, `provider_truncated`, or `no_textual_patch_unknown_reason` patch state. GitHub's changed-files response does not authoritatively distinguish binary files from other reasons a textual patch is absent, so Revio does not infer either binary content or provider truncation from change counts alone. Non-complete and non-`complete` patch values must never be treated as a full textual provider result.
