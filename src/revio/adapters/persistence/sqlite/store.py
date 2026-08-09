@@ -18,6 +18,7 @@ from revio.adapters.persistence.sqlite.installations import SQLiteInstallationRe
 from revio.adapters.persistence.sqlite.queue import SQLiteQueueRepository
 from revio.adapters.persistence.sqlite.readiness import SQLiteReadinessRepository
 from revio.adapters.persistence.sqlite.retention import SQLiteTerminalRetentionRepository
+from revio.adapters.persistence.sqlite.reviews import SQLiteReviewRepository
 from revio.adapters.persistence.sqlite.schema import SCHEMA_REVISION, SCHEMA_SQL
 from revio.config.database import DatabaseSettings
 from revio.config.queue import QueueSettings
@@ -59,6 +60,7 @@ class SQLiteStore:
         )
         self._queue = SQLiteQueueRepository(self._connections, self._installations, queue_settings)
         self._readiness = SQLiteReadinessRepository(self._connections)
+        self.reviews = SQLiteReviewRepository(self._connections)
         self._retention = SQLiteTerminalRetentionRepository(
             self._connections, self._readiness.check_capabilities
         )

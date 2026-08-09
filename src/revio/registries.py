@@ -11,6 +11,7 @@ from revio.ports.scm import (
     RepositoryContentReadPort,
     ReviewPublisherPort,
     ReviewStatusPort,
+    ReviewWriterPort,
     ThreadReaderPort,
     ThreadReplyPort,
     ThreadResolverPort,
@@ -27,6 +28,7 @@ class SCMAdapterBundle:
     thread_reader: ThreadReaderPort | None = None
     thread_resolver: ThreadResolverPort | None = None
     thread_replier: ThreadReplyPort | None = None
+    review_writer: ReviewWriterPort | None = None
 
 
 @dataclass(frozen=True)

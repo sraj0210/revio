@@ -1,6 +1,6 @@
 # Revio
 
-Revio is a provider-neutral code-review platform. Phase 3 adds durable webhook and queue orchestration around the read-only GitHub adapter. AI review generation and GitHub repository writes remain unimplemented.
+Revio is a provider-neutral code-review platform. Phase 4 adds an opt-in Anthropic diff-only review path and sandbox-only, reconciled GitHub publication on top of the durable Phase 3 queue.
 
 The approved architecture and phased roadmap are documented in [the implementation plan](docs/architecture/implementation-plan.md).
 
@@ -17,6 +17,9 @@ The approved architecture and phased roadmap are documented in [the implementati
 - Signed sandbox or durable GitHub webhook ingress selected by one mode setting
 - SQLite WAL delivery, installation-state, queue-job, and attempt persistence
 - Atomic leasing, retry/dead-job recovery, current-head validation, and stale supersession
+- Crash-safe Anthropic ProviderCall identities with observed/unknown usage accounting
+- Bounded, versioned normalized review artifacts reused after restart
+- Reconciled GitHub Check Runs and one non-blocking `COMMENT` review in sandbox mode
 - Offline terminal-history retention with permanent delivery tombstones
 - Local development and container tooling
 - Automated formatting, linting, type checking, and tests
@@ -71,7 +74,7 @@ Copy `.env.example` to `.env` for optional local overrides. The example contains
 
 ## Project status
 
-Phase 3 returns `202` in durable mode only after the delivery and any canonical active job commit atomically. Opened/synchronize events at one head coalesce while active; reopened is occurrence-specific. Workers check durable installation suspension/deletion before the only provider read, fetch current pull-request metadata, and never fetch a diff in Phase 3.
+Phase 3 durability remains the ingress foundation. Phase 4 review execution and publication are separately disabled by default. Execution uses pinned `claude-sonnet-5` with thinking disabled, structured output, bounded admission, and no retransmission after an ambiguous Messages attempt.
 
 Durable ingress uses `503 {"status":"not_accepted"}` only when persistence is confirmed absent. `500 {"status":"indeterminate"}` means commit disposition could not be established; an exact later redelivery is safe because delivery identity and payload hash remain idempotently enforced. Sanitized integrity failures use `500 {"status":"integrity_error"}` and make readiness fail while contradictory durable facts remain.
 
@@ -79,7 +82,7 @@ Exactly one worker process is enforced by a process-lifetime lock next to the SQ
 database. `revio-worker check-ready` is a pre-start check; a running worker exposes
 the separate `revio-worker health` command for container health checks.
 
-AI calls, publishing, review comments, statuses, Check Runs, `.revio.yml`, PostgreSQL, Redis, and multiple workers remain out of scope. The only GitHub POST is still installation-token exchange.
+Publishing remains forbidden at production startup in Phase 4. `.revio.yml`, finding lifecycle, a second AI provider, PostgreSQL, Redis, and multiple workers remain out of scope.
 
 When `REVIO_GITHUB_ENABLED=true`, application bootstrap validates the RSA key and registers the GitHub read and repository-content ports. Operational worker readiness requires this adapter. An intentionally idle local-development worker additionally requires `REVIO_GITHUB_ALLOW_IDLE_WORKER=true`; production and durable modes reject it. The sandbox CLI uses the same adapter-private composition factory. Changed-file and tree output includes explicit completeness values; any value other than `complete` is partial and must not be interpreted as a complete repository view.
 

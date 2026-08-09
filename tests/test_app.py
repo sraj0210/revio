@@ -46,3 +46,14 @@ def test_invalid_enabled_key_fails_application_construction() -> None:
     )
     with pytest.raises(GitHubConfigurationError):
         create_app(settings)
+
+
+def test_api_uses_same_production_publishing_policy_as_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REVIO_ENVIRONMENT", "production")
+    monkeypatch.setenv("REVIO_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("REVIO_REVIEW_PUBLISH_ENABLED", "true")
+    monkeypatch.setenv("REVIO_PUBLISH_MARKER_KEY", "x" * 32)
+    with pytest.raises(Exception, match="forbidden in production"):
+        create_app()

@@ -44,3 +44,7 @@ class ResolvedModelProfile(BaseModel):
     prompt_caching: bool = False
     image_input: bool = False
     allowed_review_modes: frozenset[Literal["diff_only", "agent"]] = frozenset({"diff_only"})
+    profile_version: str = Field(default="1", min_length=1, max_length=64)
+    thinking: Literal["disabled", "enabled", "adaptive"] = "disabled"
+    use_default_sampling: bool = True
+    token_counting: bool = False
