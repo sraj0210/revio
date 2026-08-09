@@ -7,7 +7,12 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from revio.adapters.ai.anthropic import anthropic_model_profile
-from revio.application.review.execution import DiffLimiter, build_artifact
+from revio.application.review.execution import (
+    CONTENT_LIMIT_SUMMARY,
+    LONG_VERBATIM_SOURCE_THRESHOLD,
+    DiffLimiter,
+    build_artifact,
+)
 from revio.application.review.markers import marker_key_id, marker_matches, review_marker
 from revio.config.review import ReviewSettings
 from revio.domain.models import (
@@ -15,6 +20,7 @@ from revio.domain.models import (
     DiffCollection,
     DiffFile,
     DiffLine,
+    Finding,
     TokenUsage,
 )
 from revio.domain.reviews import PartialReason, UsageDisposition
@@ -120,6 +126,83 @@ def test_partial_artifact_is_deterministic_and_has_no_findings() -> None:
     )
     assert first.digest == second.digest
     assert first.findings == ()
+
+
+def _artifact_with_prose(
+    *, summary: str = "Review complete.", explanation: str = "Use parse_record here."
+):
+    return build_artifact(
+        run_id="run",
+        profile=anthropic_model_profile(),
+        summary=summary,
+        findings=(
+            Finding(
+                category="correctness",
+                title="Check parser",
+                explanation=explanation,
+                confidence=0.9,
+                path="a.py",
+                line=1,
+            ),
+        ),
+        partial=False,
+        reasons=(),
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+        source_fragments=("prefix " + "source-character-" * 20 + " suffix",),
+    )
+
+
+@pytest.mark.parametrize("reference", ["parse_record", "return parsed.value"])
+def test_short_source_reference_is_allowed(reference: str) -> None:
+    artifact = _artifact_with_prose(explanation=f"Consider {reference} before returning.")
+    assert not artifact.partial and len(artifact.findings) == 1
+
+
+@pytest.mark.parametrize("field", ["summary", "explanation"])
+def test_long_verbatim_source_in_persisted_prose_is_downgraded(field: str) -> None:
+    quotation = "source-character-" * 10
+    artifact = _artifact_with_prose(
+        summary=quotation if field == "summary" else "Review complete.",
+        explanation=quotation if field == "explanation" else "Explanation.",
+    )
+    assert artifact.summary == CONTENT_LIMIT_SUMMARY
+    assert artifact.findings == () and artifact.partial
+    assert artifact.reason_codes == (PartialReason.OUTPUT_INVALID,)
+
+
+def test_unrelated_long_prose_is_allowed() -> None:
+    artifact = _artifact_with_prose(explanation="unrelated prose " * 20)
+    assert not artifact.partial and len(artifact.findings) == 1
+
+
+@pytest.mark.parametrize(
+    ("length", "rejected"),
+    [
+        (LONG_VERBATIM_SOURCE_THRESHOLD - 1, False),
+        (LONG_VERBATIM_SOURCE_THRESHOLD, True),
+        (LONG_VERBATIM_SOURCE_THRESHOLD + 1, True),
+    ],
+)
+def test_long_verbatim_threshold_boundary(length: int, rejected: bool) -> None:
+    source = "abcdefghijklmnopqrstuvwxyz" * 8
+    artifact = build_artifact(
+        run_id="run",
+        profile=anthropic_model_profile(),
+        summary=source[:length],
+        findings=(),
+        partial=False,
+        reasons=(),
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+        source_fragments=(source,),
+    )
+    assert artifact.partial is rejected
+    assert artifact.summary == (CONTENT_LIMIT_SUMMARY if rejected else source[:length])
+
+
+def test_fenced_content_guard_still_downgrades_without_persisting_source_fields() -> None:
+    artifact = _artifact_with_prose(explanation="fenced ``` content")
+    assert artifact.summary == CONTENT_LIMIT_SUMMARY and artifact.findings == ()
+    assert not ({"source", "diff", "patch", "evidence"} & artifact.model_dump().keys())
 
 
 def test_diff_limiter_preserves_order_and_truncates_only_at_line_boundaries() -> None:

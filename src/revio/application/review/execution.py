@@ -41,6 +41,8 @@ from revio.ports.persistence import ReviewRepository
 PROMPT_VERSION = "review-v1"
 SCHEMA_VERSION = "review-v1"
 ARTIFACT_VERSION = "review-artifact-v1"
+LONG_VERBATIM_SOURCE_THRESHOLD = 160
+CONTENT_LIMIT_SUMMARY = "Review output was omitted because it did not satisfy content limits."
 
 
 class PreflightedReviewer(Protocol):
@@ -134,6 +136,37 @@ def _artifact_digest(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _normalized_newlines(value: str) -> str:
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _source_fragments(files: tuple[DiffFile, ...]) -> tuple[str, ...]:
+    """Return bounded ephemeral source corpora; callers must never persist them."""
+    return tuple(
+        _normalized_newlines("\n".join(line.content for line in item.lines)) for item in files
+    )
+
+
+def _contains_long_verbatim_source(
+    prose: tuple[str, ...], source_fragments: tuple[str, ...]
+) -> bool:
+    """Detect an exact source/prose match of at least the documented threshold."""
+    windows: set[str] = set()
+    for value in prose:
+        normalized = _normalized_newlines(value)
+        windows.update(
+            normalized[index : index + LONG_VERBATIM_SOURCE_THRESHOLD]
+            for index in range(len(normalized) - LONG_VERBATIM_SOURCE_THRESHOLD + 1)
+        )
+    if not windows:
+        return False
+    return any(
+        fragment[index : index + LONG_VERBATIM_SOURCE_THRESHOLD] in windows
+        for fragment in source_fragments
+        for index in range(len(fragment) - LONG_VERBATIM_SOURCE_THRESHOLD + 1)
+    )
+
+
 def build_artifact(
     *,
     run_id: str,
@@ -143,9 +176,13 @@ def build_artifact(
     partial: bool,
     reasons: tuple[PartialReason, ...],
     now: datetime,
+    source_fragments: tuple[str, ...] = (),
 ) -> NormalizedReviewArtifact:
-    if "```" in summary or any("```" in item.explanation for item in findings):
-        summary = "Review output was omitted because it did not satisfy content limits."
+    prose = (summary, *(item.title for item in findings), *(item.explanation for item in findings))
+    if any("```" in value for value in prose) or _contains_long_verbatim_source(
+        prose, source_fragments
+    ):
+        summary = CONTENT_LIMIT_SUMMARY
         findings = ()
         partial = True
         reasons = tuple(dict.fromkeys((*reasons, PartialReason.OUTPUT_INVALID)))
@@ -239,6 +276,7 @@ class ReviewGenerationService:
                         raise RuntimeError("durable artifact call finalization failed")
             return existing
         files, envelope = self._limiter.limit(diff)
+        source_fragments = _source_fragments(files)
         if envelope.partial:
             return await self._fallback(
                 run_id,
@@ -355,6 +393,7 @@ class ReviewGenerationService:
                 run_id=run_id,
                 profile=profile,
                 payload=payload,
+                source_fragments=source_fragments,
                 now=current_time,
             )
         if not await self._repository.transition_call(
@@ -389,7 +428,11 @@ class ReviewGenerationService:
                 current_time,
             )
             return await self._repair(
-                run_id=run_id, profile=profile, payload=payload, now=current_time
+                run_id=run_id,
+                profile=profile,
+                payload=payload,
+                source_fragments=source_fragments,
+                now=current_time,
             )
         except ProviderCallAmbiguousError:
             await self._repository.transition_call(
@@ -519,6 +562,7 @@ class ReviewGenerationService:
                 else ()
             ),
             now=current_time,
+            source_fragments=source_fragments,
         )
         await self._repository.persist_artifact(artifact, ReviewRunState.GENERATION_ATTEMPTED)
         await self._repository.transition_call(
@@ -535,6 +579,7 @@ class ReviewGenerationService:
         run_id: str,
         profile: ResolvedModelProfile,
         payload: dict[str, object],
+        source_fragments: tuple[str, ...],
         now: datetime,
     ) -> NormalizedReviewArtifact:
         try:
@@ -750,6 +795,7 @@ class ReviewGenerationService:
             partial=True,
             reasons=(PartialReason.OUTPUT_INVALID,),
             now=now,
+            source_fragments=source_fragments,
         )
         if not await self._repository.persist_artifact(
             artifact, ReviewRunState.GENERATION_ATTEMPTED

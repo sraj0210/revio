@@ -25,3 +25,8 @@ A trustworthy HTTP 200 refusal or `max_tokens` response is not `known_rejected`:
 records `response_observed` with exact usage, persists a service-owned partial artifact, and then
 completes that same ProviderCall. Its preflight token estimate is stored separately on the immutable
 ProviderCall identity as admission metadata; it is never counted as billed usage.
+
+Before artifact persistence, the provider-neutral core compares model-authored prose with the
+bounded in-memory diff and downgrades any exact contiguous source quotation of 160 characters or
+more. This local content guard does not retry Messages, does not alter observed usage, and never
+persists the source used for comparison.

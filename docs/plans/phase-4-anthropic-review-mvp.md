@@ -281,6 +281,14 @@ quotation, fenced code block, provider error body, credential, or secret. The sy
 that all model-authored prose is free of source-derived text; it prohibits dedicated or verbatim
 source persistence and enforces bounded normalized review content.
 
+The core enforces long-verbatim exclusion before persistence against only the already-bounded,
+ephemeral diff. After newline normalization (`CRLF`/`CR` to `LF`), it rejects any model-authored
+summary, finding title, or finding explanation containing a contiguous exact 160-character window
+from a retained per-file source corpus. It builds bounded 160-character prose windows and scans the
+bounded source once; it performs no fuzzy matching or whitespace/punctuation stripping. A violation
+is replaced by the deterministic `OUTPUT_INVALID` partial artifact with no findings. The source
+corpora and comparison windows are never persisted.
+
 Add a provider-neutral bounded diff envelope used by the review core. It contains at least:
 
 - expected changed-file count from current pull-request metadata
@@ -675,7 +683,7 @@ are mandatory.
 - One repair only, exact observed per-call usage aggregation, and ambiguous calls with unknown usage
 - Normalized artifact versioning, bounds, deterministic digest, routing/partial fields, allowed
   bounded model-authored prose, and rejection of dedicated evidence/source fields, fenced code, and
-  long verbatim quotations
+  exact source quotations at the 160-character boundary
 - Known pre-acceptance, explicit rejection, and ambiguous post-acceptance Anthropic outcomes; an
   ambiguous generation never issues a second Messages call
 - Normal, repaired, incomplete/truncated, refusal, irreparable, ambiguous, and other approved

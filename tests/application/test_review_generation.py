@@ -8,7 +8,12 @@ import pytest
 
 from revio.adapters.ai.anthropic import anthropic_model_profile
 from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.review.execution import ReviewGenerationService, build_artifact
+from revio.application.review.execution import (
+    CONTENT_LIMIT_SUMMARY,
+    LONG_VERBATIM_SOURCE_THRESHOLD,
+    ReviewGenerationService,
+    build_artifact,
+)
 from revio.config.review import ReviewSettings
 from revio.domain.models import (
     ChangeRequest,
@@ -99,6 +104,42 @@ class FindingsReviewer(AmbiguousReviewer):
                 )
                 for index, confidence in enumerate(self.confidences)
             ),
+        )
+
+
+class QuotedOutputReviewer(AmbiguousReviewer):
+    def __init__(self, quotation: str) -> None:
+        super().__init__()
+        self.quotation = quotation
+
+    async def generate_preflighted(self, payload: dict[str, object]) -> ReviewResult:
+        self.generations += 1
+        return ReviewResult(
+            summary="Review complete.",
+            findings=(
+                Finding(
+                    category="correctness",
+                    title="Copied source",
+                    explanation=self.quotation,
+                    confidence=0.9,
+                    path="a.py",
+                    line=1,
+                ),
+            ),
+            usage=TokenUsage(uncached_input_tokens=17, output_tokens=4),
+        )
+
+
+class MalformedThenQuotedRepairReviewer(QuotedOutputReviewer):
+    async def generate_preflighted(self, payload: dict[str, object]) -> ReviewResult:
+        self.generations += 1
+        if self.generations == 1:
+            raise MalformedProviderOutputError(
+                "malformed", usage=TokenUsage(uncached_input_tokens=9, output_tokens=2)
+            )
+        return ReviewResult(
+            summary=self.quotation,
+            usage=TokenUsage(uncached_input_tokens=12, output_tokens=3),
         )
 
 
@@ -283,6 +324,97 @@ def _diff() -> DiffCollection:
         ),
         expected_file_count=1,
     )
+
+
+def _quoted_diff() -> tuple[DiffCollection, str]:
+    source = "value = transform_record(record, strict=True)  # bounded source line; " * 4
+    assert len(source) > LONG_VERBATIM_SOURCE_THRESHOLD
+    return (
+        DiffCollection(
+            items=(
+                DiffFile(
+                    new_path="a.py",
+                    status="added",
+                    lines=(DiffLine(content=source, side="new", new_line=1),),
+                ),
+            ),
+            expected_file_count=1,
+        ),
+        source,
+    )
+
+
+@pytest.mark.asyncio
+async def test_long_source_quotation_downgrade_keeps_usage_and_reuses_artifact(
+    alembic_database: AlembicDatabase, change_request: ChangeRequest
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    diff, source = _quoted_diff()
+    reviewer = QuotedOutputReviewer(source[:LONG_VERBATIM_SOURCE_THRESHOLD])
+    service = ReviewGenerationService(store.reviews, reviewer, ReviewSettings(review_enabled=True))
+    first = await service.generate(
+        run_id="run",
+        change_request=change_request,
+        diff=diff,
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    second = await service.generate(
+        run_id="run",
+        change_request=change_request,
+        diff=diff,
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    assert first == second and reviewer.generations == 1
+    assert first.summary == CONTENT_LIMIT_SUMMARY
+    assert first.findings == () and first.reason_codes == (PartialReason.OUTPUT_INVALID,)
+    async with store.connect() as connection:
+        calls = await connection.execute_fetchall(
+            "SELECT call_ordinal, state FROM provider_calls WHERE call_kind = 'initial'"
+        )
+        usage = await connection.execute_fetchall(
+            "SELECT usage_status, uncached_input_tokens, output_tokens FROM provider_usage"
+        )
+    assert [tuple(row) for row in calls] == [(1, "completed")]
+    assert [tuple(row) for row in usage] == [("known", 17, 4)]
+    assert source not in first.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_repair_output_uses_same_long_source_quotation_guard(
+    alembic_database: AlembicDatabase, change_request: ChangeRequest
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    diff, source = _quoted_diff()
+    reviewer = MalformedThenQuotedRepairReviewer(source[:LONG_VERBATIM_SOURCE_THRESHOLD])
+    artifact = await ReviewGenerationService(
+        store.reviews, reviewer, ReviewSettings(review_enabled=True)
+    ).generate(
+        run_id="run",
+        change_request=change_request,
+        diff=diff,
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    assert artifact.summary == CONTENT_LIMIT_SUMMARY and artifact.findings == ()
+    assert reviewer.generations == 2
+    async with store.connect() as connection:
+        calls = await connection.execute_fetchall(
+            "SELECT call_kind, call_ordinal, state FROM provider_calls ORDER BY call_kind"
+        )
+        usage = await connection.execute_fetchall(
+            "SELECT usage_status FROM provider_usage ORDER BY provider_call_id"
+        )
+    assert [tuple(row) for row in calls] == [
+        ("initial", 1, "completed"),
+        ("repair", 1, "completed"),
+    ]
+    assert [row["usage_status"] for row in usage] == ["known", "known"]
 
 
 @pytest.mark.asyncio
