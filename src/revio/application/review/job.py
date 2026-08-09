@@ -256,6 +256,7 @@ class ReviewJobExecutor:
         now: datetime,
         *,
         neutral: bool,
+        indeterminate_reason: str = "terminal_check_update_indeterminate",
     ) -> bool:
         if await self._update_check(lease, check, artifact, summary, neutral=neutral):
             return True
@@ -264,7 +265,7 @@ class ReviewJobExecutor:
             ReviewRunState.PUBLISHING,
             ReviewRunState.CHECK_RUN_INDETERMINATE,
             now,
-            reason="terminal_check_update_indeterminate",
+            reason=indeterminate_reason,
         ):
             raise RuntimeError("terminal Check Run indeterminate transition failed")
         return False
@@ -288,9 +289,16 @@ class ReviewJobExecutor:
         assert target is not None
         current = await self._reader.get_change_request(target)
         if current.head_sha != check.head_sha:
-            await self._update_check(
-                lease, check, artifact, "Superseded by newer head.", neutral=True
-            )
+            if not await self._finish_check_or_indeterminate(
+                lease,
+                check,
+                artifact,
+                "Superseded by newer head.",
+                now,
+                neutral=True,
+                indeterminate_reason="superseded_terminal_check_indeterminate",
+            ):
+                return "check_run_indeterminate"
             await self._repository.transition_run(
                 artifact.review_run_id,
                 ReviewRunState.PUBLISHING,
@@ -426,9 +434,16 @@ class ReviewJobExecutor:
             current_again = await self._reader.get_change_request(target)
             complete = await self._writer.reconcile_review(target, marker=marker)
             if current_again.head_sha != current.head_sha:
-                await self._update_check(
-                    lease, check, artifact, "Superseded by newer head.", neutral=True
-                )
+                if not await self._finish_check_or_indeterminate(
+                    lease,
+                    check,
+                    artifact,
+                    "Superseded by newer head.",
+                    now,
+                    neutral=True,
+                    indeterminate_reason="superseded_terminal_check_indeterminate",
+                ):
+                    return "check_run_indeterminate"
                 await self._repository.transition_run(
                     artifact.review_run_id,
                     ReviewRunState.PUBLISHING,

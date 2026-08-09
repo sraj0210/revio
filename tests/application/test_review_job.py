@@ -83,6 +83,17 @@ class RaceReader:
         )
 
 
+class AnchorRaceReader(RaceReader):
+    def __init__(self, target: ChangeRequestTarget) -> None:
+        super().__init__(target, race=False)
+        self.change_request_calls = 0
+
+    async def get_change_request(self, target: ChangeRequestTarget) -> ChangeRequest:
+        self.change_request_calls += 1
+        self.race = self.change_request_calls > 1
+        return await super().get_change_request(target)
+
+
 class RecordingWriter:
     def __init__(
         self,
@@ -243,14 +254,18 @@ def _settings() -> ReviewSettings:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("applied", "expected"),
+    [(None, "superseded"), (True, "superseded"), (False, "check_run_indeterminate")],
+)
 async def test_new_head_supersedes_before_review_post(
-    alembic_database: AlembicDatabase,
+    alembic_database: AlembicDatabase, applied: bool | None, expected: str
 ) -> None:
     store = alembic_database.store()
     lease, current = await _lease(store)
     reader = RaceReader(current.target, race=True)
     reviewer = SuccessfulReviewer()
-    writer = RecordingWriter()
+    writer = RecordingWriter(terminal_patch_applied=applied)
     settings = _settings()
     executor = ReviewJobExecutor(
         store.reviews,
@@ -261,12 +276,37 @@ async def test_new_head_supersedes_before_review_post(
         writer=writer,
         marker_key=b"test-marker-key-with-sufficient-entropy",
     )
-    assert await executor.execute(lease, current, now=datetime(2026, 1, 1, tzinfo=UTC)) == (
-        "superseded"
-    )
+    assert await executor.execute(lease, current, now=datetime(2026, 1, 1, tzinfo=UTC)) == expected
     assert writer.publish_calls == 0
     run = await store.reviews.get_run(stable_id("review-run", lease.job.id))
-    assert run is not None and run.state == "superseded"
+    assert run is not None and run.state == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("applied", "expected"),
+    [(True, "superseded"), (False, "check_run_indeterminate")],
+)
+async def test_new_head_after_anchor_rejection_requires_confirmed_terminal_check(
+    alembic_database: AlembicDatabase, applied: bool, expected: str
+) -> None:
+    store = alembic_database.store()
+    lease, current = await _lease(store)
+    writer = RecordingWriter(reject_first_publish=True, terminal_patch_applied=applied)
+    settings = _settings()
+    executor = ReviewJobExecutor(
+        store.reviews,
+        AnchorRaceReader(current.target),
+        ReviewGenerationService(store.reviews, SuccessfulReviewer(), settings),
+        anthropic_model_profile(),
+        settings,
+        writer=writer,
+        marker_key=b"test-marker-key-with-sufficient-entropy",
+    )
+    assert await executor.execute(lease, current, now=datetime(2026, 1, 1, tzinfo=UTC)) == expected
+    assert writer.publish_calls == 1
+    run = await store.reviews.get_run(stable_id("review-run", lease.job.id))
+    assert run is not None and run.state == expected
 
 
 @pytest.mark.asyncio

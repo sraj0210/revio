@@ -13,6 +13,7 @@ from revio.config.review import ReviewSettings
 from revio.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewRequest
 from revio.errors import (
     ProviderCallAmbiguousError,
+    ProviderCallObservedInvalidResponseError,
     ProviderCallObservedTerminalError,
     ProviderCallSafeRetryError,
     ProviderTransientError,
@@ -213,6 +214,30 @@ async def test_refusal_and_max_tokens_are_terminal_generation_outcomes(
     )
     payload = await adapter.preflight(_request(change_request))
     with pytest.raises(ProviderCallObservedTerminalError):
+        await adapter.generate_preflighted(payload)
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{"stop_reason": "end_turn", "content": []}, {"usage": {}}])
+async def test_observed_2xx_without_usage_is_terminal_and_not_retryable(
+    change_request: ChangeRequest, body: dict[str, object]
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("count_tokens"):
+            return httpx.Response(200, json={"input_tokens": 1})
+        return httpx.Response(200, json=body)
+
+    http = httpx.AsyncClient(
+        base_url="https://api.anthropic.com", transport=httpx.MockTransport(handler)
+    )
+    adapter = AnthropicReviewAdapter(
+        AnthropicSettings(anthropic_enabled=True, anthropic_api_key=SecretStr("secret")),
+        ReviewSettings(review_enabled=True),
+        http=http,
+    )
+    payload = await adapter.preflight(_request(change_request))
+    with pytest.raises(ProviderCallObservedInvalidResponseError):
         await adapter.generate_preflighted(payload)
     await http.aclose()
 

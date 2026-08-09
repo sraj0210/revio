@@ -15,6 +15,7 @@ from revio.errors import (
     IncompleteReviewInputError,
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
+    ProviderCallObservedInvalidResponseError,
     ProviderCallObservedTerminalError,
     ProviderCallRejectedError,
     ProviderCallSafeRetryError,
@@ -260,12 +261,23 @@ class AnthropicReviewAdapter:
         response = await self._post_messages(request_payload)
         try:
             body = cast(dict[str, Any], response.json())
-            raw_usage = cast(dict[str, Any], body["usage"])
+            raw_usage = body["usage"]
+            if not isinstance(raw_usage, dict):
+                raise TypeError
+            raw_usage = cast(dict[str, object], raw_usage)
+            usage_values: dict[str, object] = {
+                "uncached_input_tokens": raw_usage["input_tokens"],
+                "cached_input_tokens": raw_usage.get("cache_read_input_tokens", 0),
+                "cache_creation_tokens": raw_usage.get("cache_creation_input_tokens", 0),
+                "output_tokens": raw_usage["output_tokens"],
+            }
+            if any(
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+                for value in usage_values.values()
+            ):
+                raise ValueError
             usage = TokenUsage(
-                uncached_input_tokens=int(raw_usage.get("input_tokens", 0)),
-                cached_input_tokens=int(raw_usage.get("cache_read_input_tokens", 0)),
-                cache_creation_tokens=int(raw_usage.get("cache_creation_input_tokens", 0)),
-                output_tokens=int(raw_usage.get("output_tokens", 0)),
+                **{key: cast(int, value) for key, value in usage_values.items()},
             )
             stop_reason = body.get("stop_reason")
             if stop_reason in {"refusal", "max_tokens"}:
@@ -283,12 +295,15 @@ class AnthropicReviewAdapter:
             ProviderCallRejectedError,
             ProviderCallTerminalError,
             ProviderCallObservedTerminalError,
+            ProviderCallObservedInvalidResponseError,
         ):
             raise
         except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             observed_usage = locals().get("usage")
             if not isinstance(observed_usage, TokenUsage):
-                raise ProviderCallRejectedError("Anthropic response usage is invalid") from None
+                raise ProviderCallObservedInvalidResponseError(
+                    "Anthropic 2xx Messages response could not be normalized"
+                ) from None
             raise MalformedProviderOutputError(
                 "Anthropic response failed local validation", usage=observed_usage
             ) from None

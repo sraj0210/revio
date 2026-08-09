@@ -102,6 +102,10 @@ class ProviderCallObservedTerminalError(RevioError):
         self.reason = reason
 
 
+class ProviderCallObservedInvalidResponseError(RevioError):
+    """A 2xx Messages response was observed but cannot be normalized safely."""
+
+
 class MalformedProviderOutputError(RevioError):
     """A trustworthy provider response failed local semantic validation."""
 

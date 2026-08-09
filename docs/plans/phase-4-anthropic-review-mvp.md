@@ -364,11 +364,14 @@ reserve ProviderCall
 Each provider-neutral `ProviderCall` has immutable identity: review-run ID, `call_kind` (`initial` or
 `repair`), call ordinal, provider, resolved model-profile identity/version, prompt version, and schema
 version. Its durable lifecycle is `reserved`, `attempt_started`, `response_observed`, `ambiguous`,
-`known_rejected`, and `completed`.
+`retryable_rejected`, `terminal_rejected`, and `completed` (`known_rejected` remains read-compatible
+for databases created by earlier Phase 4 revisions but never authorizes retry).
 
 The call is reserved first. `attempt_started` must commit before Messages request bytes may be sent.
 A trustworthy response records `response_observed` and exact observed usage durably before local
-processing continues. An explicit provider rejection records `known_rejected`. A crash-recovered
+processing continues. An explicitly safe retry rejection records `retryable_rejected`; a
+non-retryable explicit rejection records `terminal_rejected`. Only `retryable_rejected` authorizes
+the next call ordinal. A crash-recovered
 `attempt_started` without a trustworthy recorded response becomes `ambiguous` with
 `usage_status=unknown`, even if the crash occurred before actual transmission. That conservative
 choice prefers a missed review over a possible duplicate billed generation.
@@ -471,8 +474,10 @@ Persistence invariants:
   Immutable fields—review-run ID, call kind/ordinal, provider/model identity, prompt/schema versions,
   and original call identity—never change.
 - Provider-call state is constrained to `reserved`, `attempt_started`, `response_observed`,
-  `ambiguous`, `known_rejected`, or `completed`. Only durable `attempt_started` authorizes network
-  transmission. Restart converts an unobserved attempted call to ambiguous and never retransmits it.
+  `ambiguous`, `retryable_rejected`, `terminal_rejected`, legacy `known_rejected`, or `completed`.
+  Only durable `attempt_started` authorizes network transmission. Restart converts an unobserved
+  attempted call to ambiguous and never retransmits it; only `retryable_rejected` permits a new
+  ordinal.
 - `provider_usage` is append-only. Observed responses append exact normalized usage with
   `usage_status=known`; ambiguous calls append or durably represent `usage_status=unknown` without
   token counts. A uniqueness constraint prevents multiple usage dispositions per call/attempt.

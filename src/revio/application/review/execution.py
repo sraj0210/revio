@@ -30,6 +30,7 @@ from revio.errors import (
     IncompleteReviewInputError,
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
+    ProviderCallObservedInvalidResponseError,
     ProviderCallObservedTerminalError,
     ProviderCallRejectedError,
     ProviderCallSafeRetryError,
@@ -280,7 +281,7 @@ class ReviewGenerationService:
                 )
         latest = await self._repository.latest_call(run_id, "initial")
         ordinal = 1 if latest is None else latest.identity.call_ordinal
-        if latest is not None and latest.state == ProviderCallState.KNOWN_REJECTED:
+        if latest is not None and latest.state == ProviderCallState.RETRYABLE_REJECTED:
             ordinal += 1
             latest = None
         call_identity = ProviderCallIdentity(
@@ -333,6 +334,17 @@ class ReviewGenerationService:
                 profile,
                 PartialReason.PROVIDER_CALL_AMBIGUOUS,
                 "AI review outcome was unavailable.",
+                current_time,
+            )
+        if call.state in {
+            ProviderCallState.TERMINAL_REJECTED,
+            ProviderCallState.KNOWN_REJECTED,
+        }:
+            return await self._fallback(
+                run_id,
+                profile,
+                PartialReason.PROVIDER_REFUSAL,
+                "AI review generation was rejected.",
                 current_time,
             )
         if call.state == ProviderCallState.COMPLETED:
@@ -398,7 +410,7 @@ class ReviewGenerationService:
             await self._repository.transition_call(
                 call.identity.id,
                 ProviderCallState.ATTEMPT_STARTED,
-                ProviderCallState.KNOWN_REJECTED,
+                ProviderCallState.RETRYABLE_REJECTED,
                 current_time,
             )
             raise
@@ -433,11 +445,35 @@ class ReviewGenerationService:
             ):
                 raise RuntimeError("observed terminal provider call could not complete") from None
             return artifact
+        except ProviderCallObservedInvalidResponseError:
+            if not await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.ATTEMPT_STARTED,
+                ProviderCallState.RESPONSE_OBSERVED,
+                current_time,
+                usage=UsageDisposition(status="unknown"),
+            ):
+                raise RuntimeError("observed invalid response could not be persisted") from None
+            artifact = await self._fallback(
+                run_id,
+                profile,
+                PartialReason.OUTPUT_INVALID,
+                "AI review generation did not produce a usable review.",
+                current_time,
+            )
+            if not await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.RESPONSE_OBSERVED,
+                ProviderCallState.COMPLETED,
+                current_time,
+            ):
+                raise RuntimeError("observed invalid provider call could not complete") from None
+            return artifact
         except (ProviderCallRejectedError, ProviderCallTerminalError):
             await self._repository.transition_call(
                 call.identity.id,
                 ProviderCallState.ATTEMPT_STARTED,
-                ProviderCallState.KNOWN_REJECTED,
+                ProviderCallState.TERMINAL_REJECTED,
                 current_time,
             )
             return await self._fallback(
@@ -513,7 +549,7 @@ class ReviewGenerationService:
             )
         latest = await self._repository.latest_call(run_id, "repair")
         ordinal = 1 if latest is None else latest.identity.call_ordinal
-        if latest is not None and latest.state == ProviderCallState.KNOWN_REJECTED:
+        if latest is not None and latest.state == ProviderCallState.RETRYABLE_REJECTED:
             ordinal += 1
             latest = None
         identity = ProviderCallIdentity(
@@ -552,6 +588,17 @@ class ReviewGenerationService:
                 "AI review repair outcome was unavailable.",
                 now,
             )
+        if call.state in {
+            ProviderCallState.TERMINAL_REJECTED,
+            ProviderCallState.KNOWN_REJECTED,
+        }:
+            return await self._fallback(
+                run_id,
+                profile,
+                PartialReason.REPAIR_FAILED,
+                "AI review repair was rejected.",
+                now,
+            )
         if call.state == ProviderCallState.RESPONSE_OBSERVED:
             artifact = await self._fallback(
                 run_id,
@@ -586,7 +633,7 @@ class ReviewGenerationService:
             await self._repository.transition_call(
                 call.identity.id,
                 ProviderCallState.ATTEMPT_STARTED,
-                ProviderCallState.KNOWN_REJECTED,
+                ProviderCallState.RETRYABLE_REJECTED,
                 now,
             )
             raise
@@ -631,6 +678,30 @@ class ReviewGenerationService:
             ):
                 raise RuntimeError("observed terminal repair call could not complete") from None
             return artifact
+        except ProviderCallObservedInvalidResponseError:
+            if not await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.ATTEMPT_STARTED,
+                ProviderCallState.RESPONSE_OBSERVED,
+                now,
+                usage=UsageDisposition(status="unknown"),
+            ):
+                raise RuntimeError("observed invalid repair could not be persisted") from None
+            artifact = await self._fallback(
+                run_id,
+                profile,
+                PartialReason.REPAIR_FAILED,
+                "AI review repair did not produce a usable review.",
+                now,
+            )
+            if not await self._repository.transition_call(
+                call.identity.id,
+                ProviderCallState.RESPONSE_OBSERVED,
+                ProviderCallState.COMPLETED,
+                now,
+            ):
+                raise RuntimeError("observed invalid repair could not complete") from None
+            return artifact
         except MalformedProviderOutputError as error:
             if not isinstance(error.usage, TokenUsage):
                 raise RuntimeError("repair output lacked normalized usage") from None
@@ -658,7 +729,7 @@ class ReviewGenerationService:
             await self._repository.transition_call(
                 call.identity.id,
                 ProviderCallState.ATTEMPT_STARTED,
-                ProviderCallState.KNOWN_REJECTED,
+                ProviderCallState.TERMINAL_REJECTED,
                 now,
             )
             return await self._fallback(

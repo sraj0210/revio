@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS provider_calls (
     estimated_input_tokens INTEGER NOT NULL CHECK(estimated_input_tokens >= 0),
     state TEXT NOT NULL CHECK(state IN (
         'reserved', 'attempt_started', 'response_observed', 'ambiguous',
-        'known_rejected', 'completed'
+        'retryable_rejected', 'terminal_rejected', 'known_rejected', 'completed'
     )),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,

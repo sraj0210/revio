@@ -224,7 +224,8 @@ class SQLiteReviewRepository:
             ProviderCallState.ATTEMPT_STARTED: {
                 ProviderCallState.RESPONSE_OBSERVED,
                 ProviderCallState.AMBIGUOUS,
-                ProviderCallState.KNOWN_REJECTED,
+                ProviderCallState.RETRYABLE_REJECTED,
+                ProviderCallState.TERMINAL_REJECTED,
             },
             ProviderCallState.RESPONSE_OBSERVED: {ProviderCallState.COMPLETED},
         }

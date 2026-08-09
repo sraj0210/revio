@@ -14,7 +14,9 @@ class ProviderCallState(StrEnum):
     ATTEMPT_STARTED = "attempt_started"
     RESPONSE_OBSERVED = "response_observed"
     AMBIGUOUS = "ambiguous"
-    KNOWN_REJECTED = "known_rejected"
+    RETRYABLE_REJECTED = "retryable_rejected"
+    TERMINAL_REJECTED = "terminal_rejected"
+    KNOWN_REJECTED = "known_rejected"  # Read compatibility; never authorizes retry.
     COMPLETED = "completed"
 
 

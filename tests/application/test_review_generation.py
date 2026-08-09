@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 import pytest
 
@@ -30,6 +31,7 @@ from revio.errors import (
     IncompleteReviewInputError,
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
+    ProviderCallObservedInvalidResponseError,
     ProviderCallObservedTerminalError,
     ProviderCallSafeRetryError,
 )
@@ -126,6 +128,22 @@ class MalformedThenObservedTerminalRepairReviewer(ObservedTerminalReviewer):
             usage=TokenUsage(uncached_input_tokens=7, output_tokens=1),
             reason=self.reason,
         )
+
+
+class ObservedInvalidReviewer(AmbiguousReviewer):
+    async def generate_preflighted(self, payload: dict[str, object]) -> ReviewResult:
+        self.generations += 1
+        raise ProviderCallObservedInvalidResponseError("invalid observed 2xx")
+
+
+class MalformedThenObservedInvalidRepairReviewer(ObservedInvalidReviewer):
+    async def generate_preflighted(self, payload: dict[str, object]) -> ReviewResult:
+        self.generations += 1
+        if self.generations == 1:
+            raise MalformedProviderOutputError(
+                "malformed", usage=TokenUsage(uncached_input_tokens=5, output_tokens=2)
+            )
+        raise ProviderCallObservedInvalidResponseError("invalid observed repair 2xx")
 
 
 class ReducingAdmissionReviewer(AmbiguousReviewer):
@@ -300,7 +318,7 @@ async def test_safe_initial_retry_uses_next_provider_call_ordinal(
             )
         ).fetchall()
     assert [(row["call_ordinal"], row["state"]) for row in rows] == [
-        (1, ProviderCallState.KNOWN_REJECTED),
+        (1, ProviderCallState.RETRYABLE_REJECTED),
         (2, ProviderCallState.COMPLETED),
     ]
 
@@ -338,9 +356,73 @@ async def test_safe_repair_retry_uses_independent_next_ordinal(
             )
         ).fetchall()
     assert [(row["call_ordinal"], row["state"]) for row in rows] == [
-        (1, ProviderCallState.KNOWN_REJECTED),
+        (1, ProviderCallState.RETRYABLE_REJECTED),
         (2, ProviderCallState.COMPLETED),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_kind", ["initial", "repair"])
+async def test_terminal_rejection_restart_never_advances_provider_call_ordinal(
+    alembic_database: AlembicDatabase,
+    change_request: ChangeRequest,
+    call_kind: Literal["initial", "repair"],
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    profile = anthropic_model_profile()
+
+    async def seed(kind: Literal["initial", "repair"], state: ProviderCallState) -> None:
+        identity = ProviderCallIdentity(
+            id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"revio:provider-call:run:{kind}:1")),
+            review_run_id="run",
+            call_kind=kind,
+            call_ordinal=1,
+            provider_id=str(profile.provider_id),
+            model_profile_id=profile.alias.value,
+            model_profile_version=profile.profile_version,
+            prompt_version="review-v1",
+            schema_version="review-v1",
+        )
+        await store.reviews.reserve_call(identity, now)
+        assert await store.reviews.transition_call(
+            identity.id, ProviderCallState.RESERVED, ProviderCallState.ATTEMPT_STARTED, now
+        )
+        assert await store.reviews.transition_call(
+            identity.id, ProviderCallState.ATTEMPT_STARTED, state, now
+        )
+
+    assert await store.reviews.transition_run(
+        "run", ReviewRunState.GENERATION_PENDING, ReviewRunState.GENERATION_ATTEMPTED, now
+    )
+    if call_kind == "repair":
+        await seed("initial", ProviderCallState.RESPONSE_OBSERVED)
+        initial = await store.reviews.latest_call("run", "initial")
+        assert initial is not None
+        assert await store.reviews.transition_call(
+            initial.identity.id,
+            ProviderCallState.RESPONSE_OBSERVED,
+            ProviderCallState.COMPLETED,
+            now,
+        )
+    await seed(call_kind, ProviderCallState.TERMINAL_REJECTED)
+
+    reviewer = AmbiguousReviewer()
+    artifact = await ReviewGenerationService(
+        store.reviews, reviewer, ReviewSettings(review_enabled=True)
+    ).generate(
+        run_id="run",
+        change_request=change_request,
+        diff=_diff(),
+        profile=profile,
+        now=now,
+    )
+    assert artifact.partial and reviewer.generations == 0
+    latest = await store.reviews.latest_call("run", call_kind)
+    assert latest is not None
+    assert latest.identity.call_ordinal == 1
+    assert latest.state == ProviderCallState.TERMINAL_REJECTED
 
 
 @pytest.mark.asyncio
@@ -496,6 +578,51 @@ async def test_restart_after_response_observed_completes_same_call_without_messa
     assert reviewer.generations == 0
     call = await store.reviews.get_call(identity.id)
     assert call is not None and call.state == ProviderCallState.COMPLETED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reviewer", "call_kind"),
+    [
+        (ObservedInvalidReviewer(), "initial"),
+        (MalformedThenObservedInvalidRepairReviewer(), "repair"),
+    ],
+)
+async def test_observed_invalid_response_is_unknown_usage_and_never_retransmitted(
+    alembic_database: AlembicDatabase,
+    change_request: ChangeRequest,
+    reviewer: AmbiguousReviewer,
+    call_kind: Literal["initial", "repair"],
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    service = ReviewGenerationService(store.reviews, reviewer, ReviewSettings(review_enabled=True))
+    first = await service.generate(
+        run_id="run",
+        change_request=change_request,
+        diff=_diff(),
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    generation_count = reviewer.generations
+    second = await service.generate(
+        run_id="run",
+        change_request=change_request,
+        diff=_diff(),
+        profile=anthropic_model_profile(),
+        now=now,
+    )
+    assert first == second and reviewer.generations == generation_count
+    latest = await store.reviews.latest_call("run", call_kind)
+    assert latest is not None and latest.identity.call_ordinal == 1
+    assert latest.state == ProviderCallState.COMPLETED
+    async with store.connect() as connection:
+        usage = await connection.execute_fetchall(
+            "SELECT usage_status FROM provider_usage WHERE provider_call_id = ?",
+            (latest.identity.id,),
+        )
+    assert [row["usage_status"] for row in usage] == ["unknown"]
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,10 @@ may use a new durable ProviderCall ordinal; timeout, read-loss, and 5xx ambiguit
 Refusal, `max_tokens`, and terminal 4xx responses become deterministic neutral artifacts and never
 escape the worker. Repair has an independent ordinal sequence and the same no-retransmission rule.
 
+Only the durable `retryable_rejected` state authorizes the next ordinal. Terminal 4xx responses use
+`terminal_rejected`; an observed 2xx response whose usage cannot be trusted uses
+`response_observed` with unknown usage. Neither state is retransmitted.
+
 A trustworthy HTTP 200 refusal or `max_tokens` response is not `known_rejected`: Revio durably
 records `response_observed` with exact usage, persists a service-owned partial artifact, and then
 completes that same ProviderCall. Its preflight token estimate is stored separately on the immutable
