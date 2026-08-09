@@ -4,6 +4,7 @@ from typing import Protocol, runtime_checkable
 
 from revio.domain.identifiers import ChangeRequestTarget
 from revio.domain.models import ChangeRequest, DiffCollection, Finding, TreeCollection
+from revio.domain.reviews import ReconciliationResult, ReviewStatusDetails
 
 
 @runtime_checkable
@@ -41,4 +42,42 @@ class ThreadResolverPort(Protocol):
 class ThreadReplyPort(Protocol):
     async def reply_to_thread(
         self, target: ChangeRequestTarget, thread_id: str, body: str, operation_key: str
+    ) -> str: ...
+
+
+class ReviewWriterPort(Protocol):
+    async def reconcile_check_run(
+        self,
+        target: ChangeRequestTarget,
+        *,
+        head_sha: str,
+        external_id: str,
+        name: str = "Revio review",
+    ) -> ReconciliationResult: ...
+    async def create_check_run(
+        self, target: ChangeRequestTarget, details: ReviewStatusDetails
+    ) -> str: ...
+    async def update_check_run(
+        self,
+        target: ChangeRequestTarget,
+        provider_id: str,
+        details: ReviewStatusDetails,
+    ) -> None: ...
+    async def get_check_run(
+        self, target: ChangeRequestTarget, provider_id: str
+    ) -> dict[str, object]: ...
+    async def reconcile_review(
+        self, target: ChangeRequestTarget, *, marker: str
+    ) -> ReconciliationResult: ...
+    def validate_inline_findings(
+        self, findings: tuple[Finding, ...], diff: DiffCollection
+    ) -> tuple[Finding, ...]: ...
+    async def publish_review(
+        self,
+        target: ChangeRequestTarget,
+        *,
+        summary: str,
+        findings: tuple[Finding, ...],
+        marker: str,
+        commit_id: str,
     ) -> str: ...

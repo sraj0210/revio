@@ -1,6 +1,11 @@
 """Safe GitHub error classification."""
 
-from revio.errors import ProviderTransientError, RevioError
+from revio.errors import (
+    ProviderTransientError,
+    ProviderWriteAmbiguousError,
+    ProviderWriteRejectedError,
+    RevioError,
+)
 
 
 class GitHubError(RevioError):
@@ -43,8 +48,12 @@ class GitHubResponseError(GitHubError):
     pass
 
 
-class GitHubValidationError(GitHubError):
+class GitHubValidationError(GitHubError, ProviderWriteRejectedError):
     pass
+
+
+class GitHubAmbiguousWriteError(GitHubError, ProviderWriteAmbiguousError):
+    """A GitHub write may have succeeded but no trustworthy response was observed."""
 
 
 class GitHubProviderUnavailableError(GitHubError, ProviderTransientError):

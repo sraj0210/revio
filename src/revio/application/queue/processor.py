@@ -1,9 +1,11 @@
 """Phase 3 current-head validation; no diff or source retrieval."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from revio.application.queue.retry import retry_delay
 from revio.config.queue import QueueSettings
+from revio.domain.models import ChangeRequest
 from revio.domain.queue import InstallationStatus, JobLease
 from revio.errors import LeaseLostError, ProviderTransientError
 from revio.ports.credentials import InstallationCredentialCachePort
@@ -11,6 +13,12 @@ from revio.ports.observability import QueueMetricsPort
 from revio.ports.persistence import QueueRepository
 from revio.ports.time import Clock, RandomSource
 from revio.registries import ProviderRegistry
+
+
+class ReviewJobExecutorPort(Protocol):
+    async def execute(
+        self, lease: JobLease, current: ChangeRequest, *, now: datetime | None = None
+    ) -> str: ...
 
 
 class QueueProcessor:
@@ -23,6 +31,7 @@ class QueueProcessor:
         metrics: QueueMetricsPort | None = None,
         clock: Clock | None = None,
         random_source: RandomSource | None = None,
+        review_executor: ReviewJobExecutorPort | None = None,
     ) -> None:
         self._repository = repository
         self._providers = providers
@@ -31,6 +40,7 @@ class QueueProcessor:
         self._metrics = metrics
         self._clock = clock
         self._random = random_source
+        self._review_executor = review_executor
 
     async def _require_owned(self, changed: bool) -> None:
         if not changed:
@@ -97,9 +107,43 @@ class QueueProcessor:
             await self._require_owned(
                 await self._repository.terminate(lease, "superseded", "stale_head", now)
             )
-        else:
+        elif self._review_executor is None:
             await self._require_owned(
                 await self._repository.complete(
                     lease, head_sha=current.head_sha, base_sha=current.base_sha, now=now
                 )
             )
+        else:
+            try:
+                outcome = await self._review_executor.execute(lease, current, now=now)
+            except ProviderTransientError as error:
+                delay = retry_delay(
+                    lease.attempt_number,
+                    self._settings,
+                    retry_after=getattr(error, "retry_after_seconds", None),
+                    random_value=(
+                        self._random.uniform(0.0, 1.0) if self._random is not None else None
+                    ),
+                )
+                await self._require_owned(
+                    await self._repository.retry(
+                        lease,
+                        available_at=now + timedelta(seconds=delay),
+                        error_class=type(error).__name__,
+                        error_message="review provider temporarily unavailable",
+                        now=now,
+                    )
+                )
+                return
+            if outcome == "superseded":
+                await self._require_owned(
+                    await self._repository.terminate(
+                        lease, "superseded", "stale_head_during_review", now
+                    )
+                )
+            else:
+                await self._require_owned(
+                    await self._repository.complete(
+                        lease, head_sha=current.head_sha, base_sha=current.base_sha, now=now
+                    )
+                )

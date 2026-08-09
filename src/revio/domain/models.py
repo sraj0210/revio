@@ -51,6 +51,7 @@ class DiffCollection(BaseModel):
     model_config = ConfigDict(frozen=True)
     items: tuple[DiffFile, ...] = ()
     completeness: CollectionCompleteness = CollectionCompleteness()
+    expected_file_count: int | None = Field(default=None, ge=0)
 
 
 class RepositoryEntry(BaseModel):
@@ -86,6 +87,10 @@ class Finding(BaseModel):
     confidence: float = Field(ge=0, le=1)
     path: str
     line: int | None = Field(default=None, gt=0)
+
+    @property
+    def is_inline(self) -> bool:
+        return self.line is not None
 
 
 class TokenUsage(BaseModel):

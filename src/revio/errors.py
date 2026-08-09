@@ -71,3 +71,35 @@ class RetentionIntegrityError(PersistenceError):
 
 class ProviderTransientError(RevioError):
     """A provider read may be retried safely."""
+
+    def __init__(self, message: str, *, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ProviderCallAmbiguousError(RevioError):
+    """A provider call may have been accepted without a trustworthy response."""
+
+
+class ProviderCallRejectedError(RevioError):
+    """A provider explicitly rejected a call before producing a result."""
+
+
+class MalformedProviderOutputError(RevioError):
+    """A trustworthy provider response failed local semantic validation."""
+
+    def __init__(self, message: str, *, usage: object) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
+class ReconciliationIntegrityError(RevioError):
+    """Provider reconciliation returned contradictory exact identities."""
+
+
+class ProviderWriteAmbiguousError(RevioError):
+    """A provider write may have succeeded without a trustworthy response."""
+
+
+class ProviderWriteRejectedError(RevioError):
+    """A provider proved that a write did not create an object."""

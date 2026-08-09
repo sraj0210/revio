@@ -92,6 +92,14 @@ class GitHubReadAdapter:
     def _repo_path(owner: str, repo: str) -> str:
         return f"/repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
 
+    @staticmethod
+    def coordinates(target: ChangeRequestTarget) -> tuple[int, str, str]:
+        return GitHubReadAdapter._coordinates(target)
+
+    @staticmethod
+    def repo_path(owner: str, repo: str) -> str:
+        return GitHubReadAdapter._repo_path(owner, repo)
+
     async def _pull_request_dto(
         self, target: ChangeRequestTarget
     ) -> tuple[GitHubPullRequestDTO, int, str]:
@@ -150,7 +158,9 @@ class GitHubReadAdapter:
             elif len(items) > pull_request.changed_files:
                 raise GitHubResponseError("inconsistent GitHub changed-file count")
         return DiffCollection(
-            items=tuple(self._map_file(item) for item in items), completeness=completeness
+            items=tuple(self._map_file(item) for item in items),
+            completeness=completeness,
+            expected_file_count=pull_request.changed_files,
         )
 
     @staticmethod

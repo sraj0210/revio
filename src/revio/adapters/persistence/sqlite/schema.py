@@ -1,10 +1,10 @@
-"""Phase 3 SQLite schema and invariants."""
+"""SQLite schema and invariants through Phase 4."""
 
-SCHEMA_REVISION = "0001_phase3_durable_queue"
+SCHEMA_REVISION = "0002_phase4_review_lifecycle"
 ACTIVE_STATES = "'pending', 'running', 'retry_wait'"
 TERMINAL_STATES = "'completed', 'dead', 'cancelled', 'superseded'"
 
-SCHEMA_SQL = f"""
+PHASE3_SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
     id TEXT PRIMARY KEY,
     provider_id TEXT NOT NULL,
@@ -114,6 +114,118 @@ CREATE TABLE IF NOT EXISTS alembic_version (
     version_num VARCHAR(32) NOT NULL PRIMARY KEY
 );
 """
+
+PHASE4_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS review_runs (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL UNIQUE REFERENCES queue_jobs(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK(state IN (
+        'generation_pending', 'generation_attempted', 'artifact_durable', 'publishing',
+        'completed', 'partial', 'superseded', 'publication_indeterminate',
+        'check_run_indeterminate'
+    )),
+    validated_head_sha TEXT NOT NULL,
+    validated_base_sha TEXT NOT NULL,
+    provider_check_run_id TEXT,
+    check_run_external_id TEXT NOT NULL UNIQUE,
+    terminal_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS provider_calls (
+    id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL REFERENCES review_runs(id) ON DELETE CASCADE,
+    call_kind TEXT NOT NULL CHECK(call_kind IN ('initial', 'repair')),
+    call_ordinal INTEGER NOT NULL CHECK(call_ordinal > 0),
+    provider_id TEXT NOT NULL,
+    model_profile_id TEXT NOT NULL,
+    model_profile_version TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'reserved', 'attempt_started', 'response_observed', 'ambiguous',
+        'known_rejected', 'completed'
+    )),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(review_run_id, call_kind, call_ordinal)
+);
+
+CREATE TABLE IF NOT EXISTS provider_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider_call_id TEXT NOT NULL UNIQUE REFERENCES provider_calls(id) ON DELETE CASCADE,
+    usage_status TEXT NOT NULL CHECK(usage_status IN ('known', 'unknown')),
+    uncached_input_tokens INTEGER CHECK(uncached_input_tokens >= 0),
+    cached_input_tokens INTEGER CHECK(cached_input_tokens >= 0),
+    cache_creation_tokens INTEGER CHECK(cache_creation_tokens >= 0),
+    output_tokens INTEGER CHECK(output_tokens >= 0),
+    observed_at TEXT NOT NULL,
+    CHECK((usage_status = 'known' AND uncached_input_tokens IS NOT NULL
+           AND cached_input_tokens IS NOT NULL AND cache_creation_tokens IS NOT NULL
+           AND output_tokens IS NOT NULL)
+       OR (usage_status = 'unknown' AND uncached_input_tokens IS NULL
+           AND cached_input_tokens IS NULL AND cache_creation_tokens IS NULL
+           AND output_tokens IS NULL))
+);
+
+CREATE TABLE IF NOT EXISTS review_artifacts (
+    review_run_id TEXT PRIMARY KEY REFERENCES review_runs(id) ON DELETE CASCADE,
+    artifact_version TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    model_profile_id TEXT NOT NULL,
+    model_profile_version TEXT NOT NULL,
+    summary TEXT NOT NULL CHECK(length(summary) BETWEEN 1 AND 8000),
+    findings_json TEXT NOT NULL,
+    partial INTEGER NOT NULL CHECK(partial IN (0, 1)),
+    reason_codes_json TEXT NOT NULL,
+    artifact_digest TEXT NOT NULL CHECK(length(artifact_digest) = 64),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS check_run_operations (
+    id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL UNIQUE REFERENCES review_runs(id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL UNIQUE,
+    head_sha TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'reserved_unattempted', 'attempt_started', 'known_rejected', 'ambiguous',
+        'reconciled', 'completed', 'integrity_failed'
+    )),
+    provider_check_run_id TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    terminal_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS publish_operations (
+    id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL UNIQUE REFERENCES review_runs(id) ON DELETE CASCADE,
+    operation_key TEXT NOT NULL UNIQUE,
+    marker TEXT NOT NULL UNIQUE,
+    marker_key_id TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'reserved_unattempted', 'attempt_started', 'known_rejected', 'ambiguous',
+        'reconciled', 'completed', 'integrity_failed'
+    )),
+    provider_review_id TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    terminal_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_provider_calls_run ON provider_calls(review_run_id, call_kind);
+CREATE INDEX IF NOT EXISTS ix_review_runs_state ON review_runs(state, updated_at);
+CREATE INDEX IF NOT EXISTS ix_publish_operations_state ON publish_operations(state, updated_at);
+CREATE INDEX IF NOT EXISTS ix_check_run_operations_state ON check_run_operations(state, updated_at);
+"""
+
+SCHEMA_SQL = PHASE3_SCHEMA_SQL + PHASE4_SCHEMA_SQL
 
 ACTIVE_JOB_INSERT_SQL = f"""
 INSERT INTO queue_jobs (

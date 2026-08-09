@@ -141,6 +141,39 @@ class GitHubClient:
             await self._cache.invalidate(installation_id)
         raise GitHubAuthenticationError("GitHub authentication failed")
 
+    async def write(
+        self,
+        installation_id: int,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any],
+    ) -> httpx.Response:
+        """Perform one non-redirected write; transport uncertainty remains explicit."""
+        from revio.adapters.scm.github.errors import GitHubAmbiguousWriteError
+
+        current_path = self.relative_url(path)
+        for auth_attempt in range(2):
+            token = await self._cache.get(installation_id, self._refresh)
+            try:
+                response = await self._http.request(
+                    method,
+                    current_path,
+                    json=json_body,
+                    headers={"Authorization": f"Bearer {token.get_secret_value()}"},
+                    follow_redirects=False,
+                )
+            except (httpx.TimeoutException, httpx.HTTPError):
+                raise GitHubAmbiguousWriteError("GitHub write outcome is ambiguous") from None
+            if response.status_code in {301, 302, 307, 308}:
+                raise GitHubAmbiguousWriteError("GitHub write redirect is ambiguous")
+            if response.status_code == 401 and auth_attempt == 0:
+                await self._cache.invalidate(installation_id)
+                continue
+            self.raise_for_response(response)
+            return response
+        raise GitHubAuthenticationError("GitHub authentication failed")
+
     @staticmethod
     def _retry_after(response: httpx.Response) -> float | None:
         value = response.headers.get("Retry-After")
