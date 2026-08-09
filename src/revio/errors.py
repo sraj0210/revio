@@ -23,3 +23,51 @@ class UnknownProviderError(RegistryError):
 
 class UnknownModelAliasError(RegistryError):
     """Raised when an administrator-approved model alias is unknown."""
+
+
+class PersistenceError(RevioError):
+    """A persistence operation failed safely."""
+
+
+class PersistenceUnavailableError(PersistenceError):
+    """Persistence could not complete within its bounded availability budget."""
+
+
+class PersistenceNotCommittedError(PersistenceUnavailableError):
+    """A durable operation was confirmed not to have committed."""
+
+
+class PersistenceIndeterminateError(PersistenceError):
+    """A durable operation's commit disposition could not be established safely."""
+
+
+class PersistenceIntegrityError(PersistenceError):
+    """Persistence reached a durable state that cannot be accepted safely."""
+
+
+class MigrationRequiredError(PersistenceError):
+    """The database schema is not at the required revision."""
+
+
+class QueueCapacityError(PersistenceError):
+    """The active durable queue is at its configured capacity."""
+
+
+class DeliveryIntegrityError(PersistenceError):
+    """A delivery identity was reused with different content."""
+
+
+class InvalidJobError(RevioError):
+    """A durable job cannot be decoded or processed safely."""
+
+
+class LeaseLostError(RevioError):
+    """The worker no longer owns the lease required for a state transition."""
+
+
+class RetentionIntegrityError(PersistenceError):
+    """Retention found a conflicting permanent delivery identity."""
+
+
+class ProviderTransientError(RevioError):
+    """A provider read may be retried safely."""

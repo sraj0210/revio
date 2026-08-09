@@ -27,6 +27,8 @@ class SystemClock:
 def load_private_key(settings: GitHubSettings) -> RSAPrivateKey:
     if settings.github_private_key is not None:
         raw = settings.github_private_key.get_secret_value().encode()
+        if len(raw) > 64 * 1024:
+            raise GitHubConfigurationError("GitHub private key is too large")
     elif settings.github_private_key_file is not None:
         path = settings.github_private_key_file
         if not path.is_absolute():

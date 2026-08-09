@@ -34,6 +34,7 @@ def normalize_webhook(
                 event_type="installation",
                 trigger=dto.action,
                 installation=installation,
+                provider_updated_at=dto.installation.updated_at,
             )
             return WebhookNormalizationResult(disposition="accepted", event=event)
         if event_name == "pull_request":
@@ -57,13 +58,21 @@ def normalize_webhook(
             target = ChangeRequestTarget(
                 repository=repository, external_number=dto.pull_request.number
             )
+            if dto.action == "reopened":
+                semantic_identity = (
+                    f"v1:github:{dto.installation.id}:{dto.repository.id}:change-request:"
+                    f"{dto.pull_request.number}:head:{dto.pull_request.head.sha}:"
+                    f"reopened:{delivery_id}"
+                )
+            else:
+                semantic_identity = (
+                    f"v1:github:{dto.installation.id}:{dto.repository.id}:change-request:"
+                    f"{dto.pull_request.number}:head:{dto.pull_request.head.sha}:review"
+                )
             event = ReviewEvent(
                 provider_id=GITHUB_PROVIDER_ID,
                 delivery_identity=f"github:{delivery_id}",
-                semantic_identity=(
-                    f"github:{dto.installation.id}:{dto.repository.id}:pull-request:"
-                    f"{dto.pull_request.number}:{dto.pull_request.head.sha}:{dto.action}"
-                ),
+                semantic_identity=semantic_identity,
                 event_type="change_request",
                 trigger=dto.action,
                 installation=installation,

@@ -1,11 +1,14 @@
 """Minimal private GitHub webhook DTOs."""
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class GitHubWebhookInstallation(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: int = Field(gt=0)
+    updated_at: datetime | None = None
 
 
 class GitHubWebhookRepository(BaseModel):
