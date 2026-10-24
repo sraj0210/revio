@@ -7,6 +7,7 @@ discovery, and ambiguity-safe thread resolution. It never blocks publication of 
 findings and never performs an unsafe repeated external write.
 """
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,8 +15,21 @@ from typing import Protocol
 
 from revio.domain.capabilities import ResolvedModelProfile
 from revio.domain.configuration import EffectiveReviewPolicy, path_is_excluded
+from revio.domain.finding_identity import (
+    FINGERPRINT_VERSION,
+    finding_identity_is_valid,
+    finding_record_id,
+    normalize_category,
+    normalize_multiline,
+    normalize_path,
+    normalize_rule,
+    normalize_symbol,
+    primary_fingerprint_v1,
+    secondary_fingerprint_v1,
+)
 from revio.domain.identifiers import ChangeRequestTarget
 from revio.domain.lifecycle import (
+    FindingLifecycleState,
     FindingOccurrence,
     FindingRecord,
     FindingRevalidationResult,
@@ -31,9 +45,9 @@ from revio.domain.lifecycle import (
     ThreadResolutionOperation,
     ThreadResolutionState,
 )
-from revio.domain.models import ChangeRequest, DiffCollection, TokenUsage
+from revio.domain.models import ChangeRequest, DiffCollection, Finding, TokenUsage
 from revio.domain.revalidation import FindingRevalidationRequest, RevalidationRequestItem
-from revio.domain.reviews import UsageDisposition
+from revio.domain.reviews import NormalizedReviewArtifact, UsageDisposition
 from revio.errors import (
     IncompleteReviewInputError,
     MalformedProviderOutputError,
@@ -230,6 +244,27 @@ def scope_of(target: ChangeRequestTarget) -> RepositoryScope:
     )
 
 
+@dataclass(frozen=True)
+class PublicationProjection:
+    """The durable set of only-new findings eligible for publication this run."""
+
+    new: tuple[tuple[Finding, str], ...] = ()
+
+    @property
+    def has_new(self) -> bool:
+        return bool(self.new)
+
+    @property
+    def inline(self) -> tuple[tuple[Finding, str], ...]:
+        return tuple(
+            (finding, record_id) for finding, record_id in self.new if finding.inline_eligible
+        )
+
+    @property
+    def summary_findings(self) -> tuple[Finding, ...]:
+        return tuple(finding for finding, _ in self.new if not finding.inline_eligible)
+
+
 @dataclass
 class SelectionOutcome:
     selected: tuple[FindingRecord, ...]
@@ -257,6 +292,103 @@ class FindingLifecycleService:
         self._reader = reader
         self._content = content
         self._revalidator = revalidator
+
+    async def deduplicate(
+        self,
+        *,
+        run_id: str,
+        current: ChangeRequest,
+        artifact: NormalizedReviewArtifact,
+        diff: DiffCollection,
+        now: datetime,
+    ) -> PublicationProjection:
+        """Validate identity, upsert finding records/occurrences, and project only-new findings.
+
+        Findings whose structured evidence does not occur in the submitted diff (or whose identity
+        is absent/invalid) are omitted. The authoritative artifact is never mutated; exact primary
+        duplicates keep their original record and thread and are not republished.
+        """
+        scope = scope_of(current.target)
+        new_findings: list[tuple[Finding, str]] = []
+        seen: set[str] = set()
+        for ordinal, finding in enumerate(artifact.findings):
+            if finding.identity is None:
+                continue
+            if not finding_identity_is_valid(
+                finding.identity, path=finding.path, diff_files=diff.items
+            ):
+                continue
+            primary = primary_fingerprint_v1(
+                provider_id=scope.provider_id,
+                installation_id=scope.installation_id,
+                repository_id=scope.repository_id,
+                path=finding.path,
+                category=finding.category,
+                rule=finding.identity.rule,
+                symbol=finding.identity.symbol,
+                evidence=finding.identity.evidence,
+            )
+            record_id = finding_record_id(scope.finding_scope, primary)
+            if record_id in seen:
+                continue
+            seen.add(record_id)
+            secondary = secondary_fingerprint_v1(
+                stable_repository_identity=scope.stable_identity,
+                path=finding.path,
+                category=finding.category,
+                rule=finding.identity.rule,
+                title=finding.title,
+            )
+            evidence = normalize_multiline(finding.identity.evidence)
+            record = FindingRecord(
+                id=record_id,
+                provider_id=scope.provider_id,
+                installation_id=scope.installation_id,
+                repository_id=scope.repository_id,
+                external_number=scope.external_number,
+                fingerprint_version=FINGERPRINT_VERSION,
+                primary_fingerprint=primary,
+                secondary_fingerprint=secondary,
+                path=normalize_path(finding.path),
+                category=normalize_category(finding.category),
+                rule=normalize_rule(finding.identity.rule),
+                symbol=(
+                    normalize_symbol(finding.identity.symbol)
+                    if finding.identity.symbol is not None
+                    else None
+                ),
+                evidence=evidence,
+                evidence_digest=hashlib.sha256(evidence.encode("utf-8")).hexdigest(),
+                state=FindingLifecycleState.OPEN,
+                first_seen_run_id=run_id,
+                last_seen_run_id=run_id,
+                first_seen_head_sha=current.head_sha,
+                last_seen_head_sha=current.head_sha,
+                created_at=now,
+                updated_at=now,
+            )
+            durable = await self._repository.upsert_finding(record, now)
+            is_new = durable.first_seen_run_id == run_id
+            await self._repository.record_occurrence(
+                FindingOccurrence(
+                    finding_record_id=record_id,
+                    review_run_id=run_id,
+                    artifact_ordinal=ordinal,
+                    observed_head_sha=current.head_sha,
+                    path=finding.path,
+                    line=finding.line,
+                    disposition=(
+                        OccurrenceDisposition.NEW
+                        if is_new
+                        else OccurrenceDisposition.EXACT_DUPLICATE
+                    ),
+                    publication_eligible=is_new,
+                    created_at=now,
+                )
+            )
+            if is_new:
+                new_findings.append((finding, record_id))
+        return PublicationProjection(new=tuple(new_findings))
 
     async def select_priors(
         self,
