@@ -22,7 +22,7 @@ from revio.domain.lifecycle import (
     ThreadReadResult,
     ThreadResolutionState,
 )
-from revio.domain.models import ChangeRequest, DiffCollection
+from revio.domain.models import ChangeRequest, DiffCollection, TreeCollection
 from revio.errors import ProviderWriteAmbiguousError, ProviderWriteRejectedError
 from tests.conftest import AlembicDatabase
 
@@ -83,7 +83,7 @@ class _Content:
     async def get_file(self, target: ChangeRequestTarget, path: str, ref: str) -> str | None:
         raise NotImplementedError
 
-    async def get_tree(self, target: ChangeRequestTarget, path: str, ref: str) -> object:
+    async def get_tree(self, target: ChangeRequestTarget, path: str, ref: str) -> TreeCollection:
         raise NotImplementedError
 
 

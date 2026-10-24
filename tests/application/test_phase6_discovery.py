@@ -20,6 +20,7 @@ from revio.domain.lifecycle import (
     ThreadLinkState,
     ThreadReadResult,
 )
+from revio.domain.models import ChangeRequest, DiffCollection, TreeCollection
 from tests.conftest import AlembicDatabase
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -110,10 +111,10 @@ def _service(store: SQLiteStore, reader: _FakeThreadReader) -> FindingLifecycleS
 
 
 class _RaisingReader:
-    async def get_change_request(self, target: ChangeRequestTarget) -> object:
+    async def get_change_request(self, target: ChangeRequestTarget) -> ChangeRequest:
         raise NotImplementedError
 
-    async def get_diff(self, target: ChangeRequestTarget) -> object:
+    async def get_diff(self, target: ChangeRequestTarget) -> DiffCollection:
         raise NotImplementedError
 
 
@@ -121,7 +122,7 @@ class _RaisingContent:
     async def get_file(self, target: ChangeRequestTarget, path: str, ref: str) -> str | None:
         raise NotImplementedError
 
-    async def get_tree(self, target: ChangeRequestTarget, path: str, ref: str) -> object:
+    async def get_tree(self, target: ChangeRequestTarget, path: str, ref: str) -> TreeCollection:
         raise NotImplementedError
 
 

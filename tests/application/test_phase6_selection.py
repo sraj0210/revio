@@ -105,9 +105,7 @@ class _FakeContent:
             raise value
         return str(value)
 
-    async def get_tree(
-        self, target: ChangeRequestTarget, path: str, ref: str
-    ) -> TreeCollection:
+    async def get_tree(self, target: ChangeRequestTarget, path: str, ref: str) -> TreeCollection:
         raise NotImplementedError
 
 

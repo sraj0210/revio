@@ -86,7 +86,16 @@ def test_primary_changes_when_identity_field_changes(field: str, value: str) -> 
 
 def test_absent_symbol_differs_from_present_symbol() -> None:
     present = primary_fingerprint_v1(**PRIMARY_ARGS)
-    absent = primary_fingerprint_v1(**{**PRIMARY_ARGS, "symbol": None})
+    absent = primary_fingerprint_v1(
+        provider_id=PRIMARY_ARGS["provider_id"],
+        installation_id=PRIMARY_ARGS["installation_id"],
+        repository_id=PRIMARY_ARGS["repository_id"],
+        path=PRIMARY_ARGS["path"],
+        category=PRIMARY_ARGS["category"],
+        rule=PRIMARY_ARGS["rule"],
+        symbol=None,
+        evidence=PRIMARY_ARGS["evidence"],
+    )
     assert present != absent
 
 
