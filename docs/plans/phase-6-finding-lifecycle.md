@@ -2,11 +2,12 @@
 
 ## Status
 
-Draft for review. This document does not authorize implementation.
+Approved and implemented on the Phase 6 feature branch (`feat/phase-6-finding-lifecycle`). Merge
+remains subject to the validation gates below.
 
-Phase 6 starts only after this plan is approved. It preserves all Phase 3 queue durability, Phase 4
-provider/write ambiguity safety, and Phase 5 trusted-base policy guarantees. Production review
-publishing remains prohibited; Phase 7 owns production rollout.
+Phase 6 preserves all Phase 3 queue durability, Phase 4 provider/write ambiguity safety, and Phase 5
+trusted-base policy guarantees. Production review publishing remains prohibited; Phase 7 owns
+production rollout.
 
 ## 1. Goal
 

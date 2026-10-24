@@ -20,6 +20,7 @@ class DatabaseSettings(BaseSettings):
     database_require_current_migration: Literal[True] = True
     retention_terminal_age_days: int = Field(default=30, ge=1)
     retention_batch_size: int = Field(default=500, ge=1, le=10_000)
+    retention_closed_finding_age_days: int = Field(default=180, ge=1)
 
     @model_validator(mode="after")
     def validate_database(self) -> "DatabaseSettings":

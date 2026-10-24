@@ -100,7 +100,8 @@ class _Reader:
         return _diff()
 
     async def get_file(self, target: ChangeRequestTarget, path: str, ref: str) -> str | None:
-        return f"def handler():\n    {EVIDENCE}\n"
+        # A distinctive token proves whole-file content is never persisted anywhere.
+        return f"def handler():  # REVIO_PRIVACY_FILE_BODY_TOKEN\n    {EVIDENCE}\n"
 
     async def get_tree(self, target: ChangeRequestTarget, path: str, ref: str) -> TreeCollection:
         raise NotImplementedError
@@ -467,3 +468,65 @@ async def test_fixed_prior_resolves_thread(alembic_database: AlembicDatabase) ->
     assert resolver.mutations == 1
     finding = await store.findings.get_finding(finding_id)
     assert finding is not None and finding.state == FindingLifecycleState.RESOLVED
+
+
+@pytest.mark.asyncio
+async def test_no_whole_file_content_is_persisted(alembic_database: AlembicDatabase) -> None:
+    store = alembic_database.store()
+    lease1, current1 = await _lease(store, head="head", delivery="d1")
+    reader1 = _Reader(current1.target)
+    lifecycle1 = FindingLifecycleService(
+        store.findings,
+        reader1,
+        reader1,
+        revalidator=_Revalidator(RevalidationOutcome.STILL_PRESENT),
+        thread_reader=_ThreadReader(),
+        thread_resolver=_ThreadResolver(),
+        marker_key=MARKER_KEY,
+    )
+    exec1 = _executor(
+        store,
+        reader1,
+        _Reviewer([ReviewResult(summary="s", findings=(_finding(),))]),
+        _Writer(),
+        lifecycle1,
+    )
+    await exec1.execute(lease1, current1, now=NOW)
+
+    # A second run fetches the whole file for revalidation; that content must stay ephemeral.
+    lease2, current2 = await _lease(store, head="head2", delivery="d2")
+    reader2 = _Reader(current2.target)
+    reader2.head = "head2"
+    lifecycle2 = FindingLifecycleService(
+        store.findings,
+        reader2,
+        reader2,
+        revalidator=_Revalidator(RevalidationOutcome.STILL_PRESENT),
+        thread_reader=_ThreadReader(),
+        thread_resolver=_ThreadResolver(),
+        marker_key=MARKER_KEY,
+    )
+    exec2 = _executor(
+        store,
+        reader2,
+        _Reviewer([ReviewResult(summary="s", findings=(_finding(),))]),
+        _Writer(),
+        lifecycle2,
+    )
+    await exec2.execute(lease2, current2, now=NOW)
+
+    async with store.connect() as connection:
+        tables = [
+            row["name"]
+            for row in await connection.execute_fetchall(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        ]
+        haystack = ""
+        for table in tables:
+            rows = await connection.execute_fetchall(f"SELECT * FROM {table}")
+            for row in rows:
+                haystack += "\x1f".join("" if value is None else str(value) for value in row)
+    assert "REVIO_PRIVACY_FILE_BODY_TOKEN" not in haystack
+    # The bounded, validated evidence snippet is a permitted lifecycle value and is present.
+    assert EVIDENCE in haystack

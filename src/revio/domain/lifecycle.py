@@ -230,3 +230,14 @@ class RevalidationUsage(BaseModel):
     model_config = ConfigDict(frozen=True)
     status: str
     usage: TokenUsage | None = None
+
+
+class FindingRetentionResult(BaseModel):
+    """Counts from one bounded operator-requested closed-finding pruning batch."""
+
+    model_config = ConfigDict(frozen=True)
+    findings: int = Field(ge=0)
+    occurrences: int = Field(ge=0)
+    links: int = Field(ge=0)
+    operations: int = Field(ge=0)
+    results: int = Field(ge=0)
