@@ -14,6 +14,7 @@ from revio.adapters.persistence.sqlite.connection import (
     FailureHook,
     SQLiteConnectionPolicy,
 )
+from revio.adapters.persistence.sqlite.findings import SQLiteFindingLifecycleRepository
 from revio.adapters.persistence.sqlite.ingress import SQLiteIngressRepository
 from revio.adapters.persistence.sqlite.installations import SQLiteInstallationRepository
 from revio.adapters.persistence.sqlite.queue import SQLiteQueueRepository
@@ -63,6 +64,7 @@ class SQLiteStore:
         self._readiness = SQLiteReadinessRepository(self._connections)
         self.reviews = SQLiteReviewRepository(self._connections)
         self.configurations = SQLiteConfigurationRepository(self._connections)
+        self.findings = SQLiteFindingLifecycleRepository(self._connections)
         self._retention = SQLiteTerminalRetentionRepository(
             self._connections, self._readiness.check_capabilities
         )
