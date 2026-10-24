@@ -24,6 +24,27 @@ def review_marker(marker_key: bytes, operation_key: str) -> str:
     return f"<!-- revio:v1:review:{_base64url(digest)} -->"
 
 
+FINDING_MARKER_VERSION = "finding-marker-v1"
+
+
+def finding_marker_token(marker_key: bytes, finding_record_id: str) -> str:
+    """Return the non-secret Base64URL token for a per-finding hidden marker.
+
+    The token is derived from the finding record ID through the active marker key. It reveals
+    no raw fingerprint, tenant identity, source evidence, or secret.
+    """
+    if len(marker_key) < 32:
+        raise ValueError("marker key must contain at least 32 bytes")
+    material = f"finding:{finding_record_id}".encode()
+    digest = hmac.new(marker_key, material, hashlib.sha256).digest()[:18]
+    return _base64url(digest)
+
+
+def finding_marker(token: str) -> str:
+    """Render the hidden per-finding marker comment from its stored token."""
+    return f"<!-- revio:v1:finding:{token} -->"
+
+
 def marker_matches(expected: str, candidate: str) -> bool:
     return hmac.compare_digest(expected.encode("utf-8"), candidate.encode("utf-8"))
 

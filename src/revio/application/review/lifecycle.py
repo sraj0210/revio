@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from revio.application.review.markers import (
+    FINDING_MARKER_VERSION,
+    finding_marker,
+    finding_marker_token,
+)
 from revio.domain.capabilities import ResolvedModelProfile
 from revio.domain.configuration import EffectiveReviewPolicy, path_is_excluded
 from revio.domain.finding_identity import (
@@ -60,7 +65,12 @@ from revio.errors import (
     ProviderTransientError,
 )
 from revio.ports.ai import AIFindingRevalidator
-from revio.ports.scm import ChangeRequestReadPort, RepositoryContentReadPort
+from revio.ports.scm import (
+    ChangeRequestReadPort,
+    RepositoryContentReadPort,
+    ThreadReaderPort,
+    ThreadResolverPort,
+)
 
 SELECTION_LIMIT = 25
 PER_FILE_BYTE_LIMIT = 128 * 1024
@@ -287,11 +297,96 @@ class FindingLifecycleService:
         content: RepositoryContentReadPort,
         *,
         revalidator: AIFindingRevalidator | None = None,
+        thread_reader: ThreadReaderPort | None = None,
+        thread_resolver: ThreadResolverPort | None = None,
+        marker_key: bytes | None = None,
     ) -> None:
         self._repository = repository
         self._reader = reader
         self._content = content
         self._revalidator = revalidator
+        self._thread_reader = thread_reader
+        self._thread_resolver = thread_resolver
+        self._marker_key = marker_key
+
+    def finding_marker(self, finding_record_id: str) -> str:
+        """Render the hidden per-finding marker comment for publication."""
+        if self._marker_key is None:
+            raise RuntimeError("marker key is required to render a finding marker")
+        return finding_marker(finding_marker_token(self._marker_key, finding_record_id))
+
+    async def register_pending_link(
+        self,
+        *,
+        run_id: str,
+        finding_record_id: str,
+        provider_review_id: str | None,
+        now: datetime,
+    ) -> None:
+        if self._marker_key is None:
+            raise RuntimeError("marker key is required to register a thread link")
+        token = finding_marker_token(self._marker_key, finding_record_id)
+        await self._repository.reserve_thread_link(
+            ReviewThreadLink(
+                finding_record_id=finding_record_id,
+                review_run_id=run_id,
+                provider_review_id=provider_review_id,
+                marker_digest=token,
+                marker_version=FINDING_MARKER_VERSION,
+                state=ThreadLinkState.PENDING_DISCOVERY,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    async def register_not_threaded(
+        self, *, run_id: str, finding_record_id: str, now: datetime
+    ) -> None:
+        if self._marker_key is None:
+            raise RuntimeError("marker key is required to register a thread link")
+        token = finding_marker_token(self._marker_key, finding_record_id)
+        await self._repository.reserve_thread_link(
+            ReviewThreadLink(
+                finding_record_id=finding_record_id,
+                review_run_id=run_id,
+                marker_digest=token,
+                marker_version=FINDING_MARKER_VERSION,
+                state=ThreadLinkState.NOT_THREADED,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    async def discover_and_link(
+        self, *, run_id: str, target: ChangeRequestTarget, now: datetime
+    ) -> None:
+        """Discover exactly one thread per pending per-finding marker and persist the link.
+
+        Zero, multiple, incomplete, or conflicting discovery remains discovery_indeterminate;
+        it never guesses. A transient read propagates for a bounded job retry.
+        """
+        if self._thread_reader is None or self._marker_key is None:
+            return
+        for link in await self._repository.pending_discovery_links(run_id):
+            marker = finding_marker(link.marker_digest)
+            result = await self._thread_reader.discover_thread(target, marker=marker)
+            if result.match_count == 1 and result.collection_complete:
+                await self._repository.transition_thread_link(
+                    link.finding_record_id,
+                    link.state,
+                    ThreadLinkState.LINKED,
+                    now,
+                    provider_thread_node_id=result.thread_node_ids[0],
+                    provider_review_id=result.review_ids[0] if result.review_ids else None,
+                    provider_comment_id=result.comment_ids[0] if result.comment_ids else None,
+                )
+            elif link.state != ThreadLinkState.DISCOVERY_INDETERMINATE:
+                await self._repository.transition_thread_link(
+                    link.finding_record_id,
+                    link.state,
+                    ThreadLinkState.DISCOVERY_INDETERMINATE,
+                    now,
+                )
 
     async def deduplicate(
         self,

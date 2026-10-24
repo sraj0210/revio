@@ -10,6 +10,7 @@ from revio.adapters.scm.github.auth import GitHubAppJWT, InstallationTokenCache,
 from revio.adapters.scm.github.client import GitHubClient
 from revio.adapters.scm.github.factory import github_adapter_bundle
 from revio.adapters.scm.github.publishing import GitHubReviewWriter
+from revio.adapters.scm.github.threads import GitHubThreadReader, GitHubThreadResolver
 from revio.config.github import GitHubSettings
 from revio.config.review import ReviewSettings
 from revio.registries import SCMAdapterBundle
@@ -24,6 +25,8 @@ class GitHubComposition:
     owns_http: bool
     client: GitHubClient
     writer: GitHubReviewWriter | None = None
+    thread_reader: GitHubThreadReader | None = None
+    thread_resolver: GitHubThreadResolver | None = None
 
     async def close(self) -> None:
         if self.owns_http:
@@ -66,6 +69,7 @@ def compose_github(
         max_pages=settings.github_max_pages,
         max_items=settings.github_max_items,
     )
+    publish_enabled = review_settings is not None and review_settings.review_publish_enabled
     writer = (
         GitHubReviewWriter(
             client,
@@ -73,15 +77,25 @@ def compose_github(
             max_pages=settings.github_max_pages,
             max_items=settings.github_max_items,
         )
-        if review_settings is not None and review_settings.review_publish_enabled
+        if publish_enabled
         else None
     )
+    thread_reader = (
+        GitHubThreadReader(
+            client, max_pages=settings.github_max_pages, max_items=settings.github_max_items
+        )
+        if publish_enabled
+        else None
+    )
+    thread_resolver = GitHubThreadResolver(client) if publish_enabled else None
     return GitHubComposition(
         adapter,
-        github_adapter_bundle(adapter, writer),
+        github_adapter_bundle(adapter, writer, thread_reader, thread_resolver),
         cache,
         client_http,
         owns_http,
         client,
         writer,
+        thread_reader,
+        thread_resolver,
     )
