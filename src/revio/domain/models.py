@@ -1,11 +1,15 @@
 """Normalized change-request and review models."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from revio.domain.capabilities import ResolvedModelProfile
 from revio.domain.identifiers import ChangeRequestTarget
+
+EVIDENCE_MAX_CODE_POINTS = 512
+EVIDENCE_MAX_BYTES = 2 * 1024
+SYMBOL_MAX_CODE_POINTS = 256
 
 
 class DiffLine(BaseModel):
@@ -79,6 +83,29 @@ class ChangeRequest(BaseModel):
     draft: bool = False
 
 
+class FindingIdentity(BaseModel):
+    """Bounded, structured identity material for durable finding fingerprints.
+
+    Generated title, explanation, remediation, confidence wording, and line are never
+    identity inputs. Only the normalized rule, optional symbol, and the exact bounded
+    evidence snippet (validated against the submitted diff) participate in the primary
+    fingerprint.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    rule: Annotated[
+        str, Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:[-_.][a-z0-9]+)*$")
+    ]
+    symbol: str | None = Field(default=None, min_length=1, max_length=SYMBOL_MAX_CODE_POINTS)
+    evidence: str = Field(min_length=1, max_length=EVIDENCE_MAX_CODE_POINTS)
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "FindingIdentity":
+        if len(self.evidence.encode("utf-8")) > EVIDENCE_MAX_BYTES:
+            raise ValueError("finding evidence exceeds the UTF-8 byte ceiling")
+        return self
+
+
 class Finding(BaseModel):
     model_config = ConfigDict(frozen=True)
     category: str = Field(min_length=1, max_length=64)
@@ -88,6 +115,7 @@ class Finding(BaseModel):
     path: str
     line: int | None = Field(default=None, gt=0)
     inline_eligible: bool = False
+    identity: FindingIdentity | None = None
 
     @property
     def is_inline(self) -> bool:

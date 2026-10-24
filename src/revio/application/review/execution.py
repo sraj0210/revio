@@ -39,9 +39,9 @@ from revio.errors import (
 )
 from revio.ports.persistence import ReviewRepository
 
-PROMPT_VERSION = "review-v1"
-SCHEMA_VERSION = "review-v1"
-ARTIFACT_VERSION = "review-artifact-v1"
+PROMPT_VERSION = "review-v2"
+SCHEMA_VERSION = "review-v2"
+ARTIFACT_VERSION = "review-artifact-v2"
 LONG_VERBATIM_SOURCE_THRESHOLD = 160
 CONTENT_LIMIT_SUMMARY = "Review output was omitted because it did not satisfy content limits."
 

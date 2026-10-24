@@ -50,6 +50,11 @@ async def test_request_profile_structured_output_and_observed_usage(
                                         "confidence": 0.95,
                                         "path": "a.py",
                                         "line": 1,
+                                        "identity": {
+                                            "rule": "inverted-condition",
+                                            "symbol": "handler",
+                                            "evidence": "bad()",
+                                        },
                                     }
                                 ],
                             }
@@ -97,6 +102,11 @@ async def test_request_profile_structured_output_and_observed_usage(
     assert system[0]["cache_control"] == {"type": "ephemeral"}
     assert result.usage.uncached_input_tokens == 80
     assert result.usage.cached_input_tokens == 10
+    assert len(result.findings) == 1
+    identity = result.findings[0].identity
+    assert identity is not None
+    assert identity.rule == "inverted-condition"
+    assert identity.evidence == "bad()"
     await http.aclose()
 
 
