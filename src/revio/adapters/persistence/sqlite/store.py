@@ -8,6 +8,7 @@ from pathlib import Path
 import aiosqlite
 
 from revio.adapters.observability import InMemoryQueueMetrics
+from revio.adapters.persistence.sqlite.configurations import SQLiteConfigurationRepository
 from revio.adapters.persistence.sqlite.connection import (
     CoordinationHook,
     FailureHook,
@@ -61,6 +62,7 @@ class SQLiteStore:
         self._queue = SQLiteQueueRepository(self._connections, self._installations, queue_settings)
         self._readiness = SQLiteReadinessRepository(self._connections)
         self.reviews = SQLiteReviewRepository(self._connections)
+        self.configurations = SQLiteConfigurationRepository(self._connections)
         self._retention = SQLiteTerminalRetentionRepository(
             self._connections, self._readiness.check_capabilities
         )

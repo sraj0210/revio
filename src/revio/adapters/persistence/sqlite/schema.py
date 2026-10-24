@@ -1,6 +1,6 @@
-"""SQLite schema and invariants through Phase 4."""
+"""SQLite schema and invariants through Phase 5."""
 
-SCHEMA_REVISION = "0002_phase4_review_lifecycle"
+SCHEMA_REVISION = "0003_phase5_repository_configuration"
 ACTIVE_STATES = "'pending', 'running', 'retry_wait'"
 TERMINAL_STATES = "'completed', 'dead', 'cancelled', 'superseded'"
 
@@ -233,7 +233,34 @@ CREATE INDEX IF NOT EXISTS ix_publish_operations_state ON publish_operations(sta
 CREATE INDEX IF NOT EXISTS ix_check_run_operations_state ON check_run_operations(state, updated_at);
 """
 
-SCHEMA_SQL = PHASE3_SCHEMA_SQL + PHASE4_SCHEMA_SQL
+PHASE5_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS review_configurations (
+    job_id TEXT PRIMARY KEY REFERENCES queue_jobs(id) ON DELETE CASCADE,
+    review_run_id TEXT UNIQUE REFERENCES review_runs(id),
+    provider_id TEXT NOT NULL,
+    installation_id TEXT NOT NULL,
+    repository_id TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    config_status TEXT NOT NULL CHECK(config_status IN (
+        'missing', 'valid', 'invalid', 'unavailable', 'optout_denied'
+    )),
+    schema_version INTEGER,
+    normalized_enabled INTEGER NOT NULL CHECK(normalized_enabled IN (0, 1)),
+    focus_areas_json TEXT NOT NULL,
+    repository_exclusions_json TEXT NOT NULL,
+    effective_summary_confidence REAL NOT NULL,
+    effective_inline_confidence REAL NOT NULL,
+    warning_codes_json TEXT NOT NULL,
+    source_digest TEXT CHECK(source_digest IS NULL OR length(source_digest) = 64),
+    policy_digest TEXT NOT NULL CHECK(length(policy_digest) = 64),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_review_configurations_identity
+ON review_configurations(provider_id, installation_id, repository_id, base_sha);
+"""
+
+SCHEMA_SQL = PHASE3_SCHEMA_SQL + PHASE4_SCHEMA_SQL + PHASE5_SCHEMA_SQL
 
 ACTIVE_JOB_INSERT_SQL = f"""
 INSERT INTO queue_jobs (

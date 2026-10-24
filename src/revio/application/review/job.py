@@ -2,12 +2,13 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Literal, cast
+from typing import Literal, Protocol, cast
 
 from revio.application.review.execution import ReviewGenerationService, build_artifact
 from revio.application.review.markers import marker_key_id, review_marker
 from revio.config.review import ReviewSettings
 from revio.domain.capabilities import ResolvedModelProfile
+from revio.domain.configuration import EffectiveReviewPolicy
 from revio.domain.models import ChangeRequest, DiffCollection
 from revio.domain.queue import JobLease
 from revio.domain.reviews import (
@@ -48,6 +49,10 @@ def publication_summary(artifact: NormalizedReviewArtifact) -> str:
     return f"{artifact.summary}\n\nSummary findings:\n{rendered}"[:8000]
 
 
+class ConfigurationLinkRepository(Protocol):
+    async def link_run(self, job_id: str, run_id: str, now: datetime) -> bool: ...
+
+
 class ReviewJobExecutor:
     def __init__(
         self,
@@ -59,6 +64,7 @@ class ReviewJobExecutor:
         *,
         writer: ReviewWriterPort | None = None,
         marker_key: bytes | None = None,
+        configuration_repository: ConfigurationLinkRepository | None = None,
     ) -> None:
         self._repository = repository
         self._reader = reader
@@ -67,8 +73,37 @@ class ReviewJobExecutor:
         self._settings = settings
         self._writer = writer
         self._marker_key = marker_key
+        self._configuration_repository = configuration_repository
         if settings.review_publish_enabled and (writer is None or marker_key is None):
             raise ValueError("publishing requires GitHub writer and marker key")
+
+    async def _apply_policy_warning(
+        self,
+        artifact: NormalizedReviewArtifact,
+        policy: EffectiveReviewPolicy | None,
+        now: datetime,
+    ) -> NormalizedReviewArtifact:
+        warning = policy.warning_text if policy is not None else None
+        if warning is None or artifact.summary.startswith(warning):
+            return artifact
+        replacement = build_artifact(
+            run_id=artifact.review_run_id,
+            profile=self._profile,
+            summary=artifact.summary,
+            findings=artifact.findings,
+            partial=artifact.partial,
+            reasons=artifact.reason_codes,
+            now=now,
+            warning=warning,
+        )
+        if not await self._repository.replace_artifact(
+            replacement, expected_digest=artifact.digest
+        ):
+            durable = await self._repository.get_artifact(artifact.review_run_id)
+            if durable is None or not durable.summary.startswith(warning):
+                raise RuntimeError("configuration warning artifact CAS failed")
+            return durable
+        return replacement
 
     async def _create_or_reconcile_check(
         self,
@@ -629,6 +664,7 @@ class ReviewJobExecutor:
         current: ChangeRequest,
         *,
         now: datetime | None = None,
+        policy: EffectiveReviewPolicy | None = None,
     ) -> Literal[
         "completed", "partial", "superseded", "publication_indeterminate", "check_run_indeterminate"
     ]:
@@ -642,6 +678,12 @@ class ReviewJobExecutor:
             external_id=stable_id("check-run", run_id),
             now=current_time,
         )
+        if self._configuration_repository is not None:
+            linked = await self._configuration_repository.link_run(
+                lease.job.id, run.id, current_time
+            )
+            if not linked:
+                raise RuntimeError("durable configuration could not link to review run")
         terminal_outcomes = {
             ReviewRunState.COMPLETED: "completed",
             ReviewRunState.PARTIAL: "partial",
@@ -658,8 +700,10 @@ class ReviewJobExecutor:
                 change_request=current,
                 diff=diff,
                 profile=self._profile,
+                policy=policy,
                 now=current_time,
             )
+            artifact = await self._apply_policy_warning(artifact, policy, current_time)
             if not await self._repository.transition_run(
                 run.id,
                 ReviewRunState.ARTIFACT_DURABLE,
@@ -685,6 +729,7 @@ class ReviewJobExecutor:
             artifact = await self._repository.get_artifact(run.id)
             if artifact is None:
                 raise RuntimeError("durable review stage is missing its artifact")
+            artifact = await self._apply_policy_warning(artifact, policy, current_time)
             diff = await self._reader.get_diff(current.target)
         else:
             in_progress = await self._update_check(
@@ -719,8 +764,10 @@ class ReviewJobExecutor:
                 change_request=current,
                 diff=diff,
                 profile=self._profile,
+                policy=policy,
                 now=current_time,
             )
+            artifact = await self._apply_policy_warning(artifact, policy, current_time)
         if run.state != ReviewRunState.PUBLISHING:
             if not await self._repository.transition_run(
                 run.id,

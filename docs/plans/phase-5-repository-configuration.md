@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft for review. This document does not authorize implementation.
+Approved and implemented on the Phase 5 feature branch. Merge remains subject to the validation gates below.
 
 Phase 5 starts only after this plan is approved. It must preserve all Phase 3 durability and Phase 4
 provider/write safety guarantees. Production review publishing remains prohibited; removing that gate

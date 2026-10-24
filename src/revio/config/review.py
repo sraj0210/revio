@@ -6,6 +6,8 @@ from typing import Literal, Self
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from revio.domain.configuration import validate_exclusion_pattern
+
 
 class ReviewSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="REVIO_", env_ignore_empty=True, extra="ignore")
@@ -27,6 +29,26 @@ class ReviewSettings(BaseSettings):
     review_max_findings: int = Field(default=50, gt=0, le=100)
     review_inline_confidence: float = Field(default=0.8, ge=0, le=1)
     review_summary_confidence: float = Field(default=0.6, ge=0, le=1)
+    review_rollout_repositories: str = ""
+    review_allow_repository_optout: bool = False
+    review_drafts_enabled: bool = True
+    review_protected_exclusions: str = ""
+
+    @property
+    def rollout_repositories(self) -> frozenset[str]:
+        return frozenset(
+            value.strip() for value in self.review_rollout_repositories.split(",") if value.strip()
+        )
+
+    @property
+    def protected_exclusions(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                value.strip()
+                for value in self.review_protected_exclusions.split(",")
+                if value.strip()
+            )
+        )
 
     @property
     def admission_token_ceiling(self) -> int:
@@ -52,4 +74,6 @@ class ReviewSettings(BaseSettings):
             raise ValueError("review token safety margin leaves no admission budget")
         if self.review_summary_confidence > self.review_inline_confidence:
             raise ValueError("summary confidence cannot exceed inline confidence")
+        for pattern in self.protected_exclusions:
+            validate_exclusion_pattern(pattern)
         return self

@@ -146,6 +146,10 @@ class QueueProcessor:
                         lease, "superseded", "stale_head_during_review", now
                     )
                 )
+            elif outcome in {"rollout_disabled", "repository_disabled", "draft_disabled"}:
+                await self._require_owned(
+                    await self._repository.terminate(lease, "completed", outcome, now)
+                )
             else:
                 await self._require_owned(
                     await self._repository.complete(

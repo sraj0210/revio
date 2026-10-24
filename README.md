@@ -1,6 +1,6 @@
 # Revio
 
-Revio is a provider-neutral code-review platform. Phase 4 adds an opt-in Anthropic diff-only review path and sandbox-only, reconciled GitHub publication on top of the durable Phase 3 queue.
+Revio is a provider-neutral code-review platform. Phase 5 adds trusted-base repository configuration and administrator-controlled rollout to the durable Anthropic diff-only review path.
 
 The approved architecture and phased roadmap are documented in [the implementation plan](docs/architecture/implementation-plan.md).
 
@@ -20,6 +20,8 @@ The approved architecture and phased roadmap are documented in [the implementati
 - Crash-safe Anthropic ProviderCall identities with observed/unknown usage accounting
 - Bounded, versioned normalized review artifacts reused after restart
 - Reconciled GitHub Check Runs and one non-blocking `COMMENT` review in sandbox mode
+- Strict, versioned `.revio.yml` policy loaded only from the exact pull-request base commit
+- Stable-ID rollout, administrator-protected exclusions, opt-out policy, and durable resolution reuse
 - Offline terminal-history retention with permanent delivery tombstones
 - Local development and container tooling
 - Automated formatting, linting, type checking, and tests
@@ -70,11 +72,11 @@ docker compose down
 
 ## Configuration
 
-Copy `.env.example` to `.env` for optional local overrides. The example contains no credentials. Revio does not load repository-level configuration in Phase 2.
+Copy `.env.example` to `.env` for optional local overrides. The example contains no credentials. Reviews fail closed unless the stable `provider:installation-id:repository-id` identity appears in `REVIO_REVIEW_ROLLOUT_REPOSITORIES`. A repository may only narrow administrator policy through `.revio.yml`; missing configuration uses secure defaults.
 
 ## Project status
 
-Phase 3 durability remains the ingress foundation. Phase 4 review execution and publication are separately disabled by default. Execution uses pinned `claude-sonnet-5` with thinking disabled, structured output, bounded admission, and no retransmission after an ambiguous Messages attempt.
+Phase 3 durability remains the ingress foundation. Review execution and publication are separately disabled by default. Execution uses pinned `claude-sonnet-5` with thinking disabled, structured output, bounded admission, and no retransmission after an ambiguous Messages attempt. Phase 5 configuration resolution is normalized and persisted before Check Run or Anthropic work, and restart never reinterprets a durable resolution.
 
 Durable ingress uses `503 {"status":"not_accepted"}` only when persistence is confirmed absent. `500 {"status":"indeterminate"}` means commit disposition could not be established; an exact later redelivery is safe because delivery identity and payload hash remain idempotently enforced. Sanitized integrity failures use `500 {"status":"integrity_error"}` and make readiness fail while contradictory durable facts remain.
 
@@ -82,7 +84,7 @@ Exactly one worker process is enforced by a process-lifetime lock next to the SQ
 database. `revio-worker check-ready` is a pre-start check; a running worker exposes
 the separate `revio-worker health` command for container health checks.
 
-Publishing remains forbidden at production startup in Phase 4. `.revio.yml`, finding lifecycle, a second AI provider, PostgreSQL, Redis, and multiple workers remain out of scope.
+Publishing remains forbidden at production startup. Finding lifecycle, a second AI provider, PostgreSQL, Redis, and multiple workers remain out of scope.
 
 When `REVIO_GITHUB_ENABLED=true`, application bootstrap validates the RSA key and registers the GitHub read and repository-content ports. Operational worker readiness requires this adapter. An intentionally idle local-development worker additionally requires `REVIO_GITHUB_ALLOW_IDLE_WORKER=true`; production and durable modes reject it. The sandbox CLI uses the same adapter-private composition factory. Changed-file and tree output includes explicit completeness values; any value other than `complete` is partial and must not be interpreted as a complete repository view.
 
