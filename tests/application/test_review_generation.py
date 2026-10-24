@@ -15,6 +15,7 @@ from revio.application.review.execution import (
     build_artifact,
 )
 from revio.config.review import ReviewSettings
+from revio.domain.configuration import EffectiveReviewPolicy
 from revio.domain.models import (
     ChangeRequest,
     DiffCollection,
@@ -324,6 +325,33 @@ def _diff() -> DiffCollection:
         ),
         expected_file_count=1,
     )
+
+
+@pytest.mark.asyncio
+async def test_all_excluded_diff_persists_success_without_provider_call(
+    alembic_database: AlembicDatabase, change_request: ChangeRequest
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+    reviewer = AmbiguousReviewer()
+    artifact = await ReviewGenerationService(
+        store.reviews, reviewer, ReviewSettings(review_enabled=True)
+    ).generate(
+        run_id="run",
+        change_request=change_request,
+        diff=_diff(),
+        profile=anthropic_model_profile(),
+        policy=EffectiveReviewPolicy(
+            exclusions=(".revio.yml", "a.py"),
+            summary_confidence=0.6,
+            inline_confidence=0.8,
+        ),
+        now=now,
+    )
+    assert not artifact.partial
+    assert reviewer.generations == 0
+    assert await store.reviews.latest_call("run", "initial") is None
 
 
 def _quoted_diff() -> tuple[DiffCollection, str]:

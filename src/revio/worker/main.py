@@ -15,6 +15,7 @@ from revio.adapters.scm.github.composition import compose_github
 from revio.adapters.scm.github.credentials import GitHubCredentialCache
 from revio.application.queue.processor import QueueProcessor
 from revio.application.queue.service import QueueWorker
+from revio.application.repository_configuration import RepositoryConfigurationExecutor
 from revio.application.review.execution import ReviewGenerationService
 from revio.application.review.job import ReviewJobExecutor
 from revio.application.review.markers import load_marker_key, marker_key_id
@@ -104,14 +105,20 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                     queue,
                     metrics=store.metrics,
                     review_executor=(
-                        ReviewJobExecutor(
-                            store.reviews,
+                        RepositoryConfigurationExecutor(
+                            store.configurations,
                             github.adapter,
-                            ReviewGenerationService(store.reviews, anthropic, review_settings),
-                            cast(ResolvedModelProfile, review_profile),
+                            ReviewJobExecutor(
+                                store.reviews,
+                                github.adapter,
+                                ReviewGenerationService(store.reviews, anthropic, review_settings),
+                                cast(ResolvedModelProfile, review_profile),
+                                review_settings,
+                                writer=github.writer,
+                                marker_key=active_marker_key,
+                                configuration_repository=store.configurations,
+                            ),
                             review_settings,
-                            writer=github.writer,
-                            marker_key=active_marker_key,
                         )
                         if anthropic is not None
                         else None

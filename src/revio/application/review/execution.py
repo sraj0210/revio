@@ -8,6 +8,7 @@ from typing import Protocol
 
 from revio.config.review import ReviewSettings
 from revio.domain.capabilities import ResolvedModelProfile
+from revio.domain.configuration import EffectiveReviewPolicy, path_is_excluded
 from revio.domain.models import (
     ChangeRequest,
     DiffCollection,
@@ -66,19 +67,25 @@ class DiffLimiter:
     def __init__(self, settings: ReviewSettings) -> None:
         self._settings = settings
 
-    def limit(self, collection: DiffCollection) -> tuple[tuple[DiffFile, ...], DiffEnvelope]:
+    def limit(
+        self, collection: DiffCollection, exclusions: tuple[str, ...] = ()
+    ) -> tuple[tuple[DiffFile, ...], DiffEnvelope]:
         accepted: list[DiffFile] = []
         total_lines = 0
         total_bytes = 0
         reasons: list[str] = []
         patch_complete = True
         for item in collection.items:
+            if item.patch_state != "complete":
+                patch_complete = False
+                reasons.append(f"patch_{item.patch_state}")
+            path = item.new_path or item.old_path
+            if path is not None and path_is_excluded(path, exclusions):
+                continue
             if len(accepted) >= self._settings.review_max_files:
                 reasons.append("service_file_limit")
                 break
             if item.patch_state != "complete":
-                patch_complete = False
-                reasons.append(f"patch_{item.patch_state}")
                 continue
             retained = item
             encoded = json.dumps(retained.model_dump(mode="json"), separators=(",", ":")).encode()
@@ -177,7 +184,10 @@ def build_artifact(
     reasons: tuple[PartialReason, ...],
     now: datetime,
     source_fragments: tuple[str, ...] = (),
+    warning: str | None = None,
 ) -> NormalizedReviewArtifact:
+    if warning is not None:
+        summary = f"{warning}\n\n{summary}"[:8000]
     prose = (summary, *(item.title for item in findings), *(item.explanation for item in findings))
     if any("```" in value for value in prose) or _contains_long_verbatim_source(
         prose, source_fragments
@@ -235,6 +245,7 @@ class ReviewGenerationService:
         summary: str,
         now: datetime,
         expected_state: ReviewRunState = ReviewRunState.GENERATION_ATTEMPTED,
+        warning: str | None = None,
     ) -> NormalizedReviewArtifact:
         artifact = build_artifact(
             run_id=run_id,
@@ -244,6 +255,7 @@ class ReviewGenerationService:
             partial=True,
             reasons=(reason,),
             now=now,
+            warning=warning,
         )
         if not await self._repository.persist_artifact(artifact, expected_state):
             existing = await self._repository.get_artifact(run_id)
@@ -259,6 +271,7 @@ class ReviewGenerationService:
         change_request: ChangeRequest,
         diff: DiffCollection,
         profile: ResolvedModelProfile,
+        policy: EffectiveReviewPolicy | None = None,
         now: datetime | None = None,
     ) -> NormalizedReviewArtifact:
         current_time = now or datetime.now(UTC)
@@ -275,7 +288,12 @@ class ReviewGenerationService:
                     ):
                         raise RuntimeError("durable artifact call finalization failed")
             return existing
-        files, envelope = self._limiter.limit(diff)
+        effective = policy or EffectiveReviewPolicy(
+            summary_confidence=self._settings.review_summary_confidence,
+            inline_confidence=self._settings.review_inline_confidence,
+        )
+        warning = effective.warning_text
+        files, envelope = self._limiter.limit(diff, effective.exclusions)
         source_fragments = _source_fragments(files)
         if envelope.partial:
             return await self._fallback(
@@ -285,11 +303,32 @@ class ReviewGenerationService:
                 "Review input was incomplete; no inline findings were published.",
                 current_time,
                 ReviewRunState.GENERATION_PENDING,
+                warning,
             )
+        if not files:
+            artifact = build_artifact(
+                run_id=run_id,
+                profile=profile,
+                summary="No review was needed because all changed files were excluded by policy.",
+                findings=(),
+                partial=False,
+                reasons=(),
+                now=current_time,
+                warning=warning,
+            )
+            if not await self._repository.persist_artifact(
+                artifact, ReviewRunState.GENERATION_PENDING
+            ):
+                existing = await self._repository.get_artifact(run_id)
+                if existing is None:
+                    raise RuntimeError("all-excluded artifact could not be persisted")
+                return existing
+            return artifact
         request = ReviewRequest(
             change_request=change_request,
             diff_files=files,
             model_profile=profile,
+            focus_areas=effective.focus_areas,
         )
         token_reduced = False
         while True:
@@ -534,17 +573,13 @@ class ReviewGenerationService:
             usage=UsageDisposition(status="known", usage=result.usage),
         )
         accepted = tuple(
-            item
-            for item in result.findings
-            if item.confidence >= self._settings.review_summary_confidence
+            item for item in result.findings if item.confidence >= effective.summary_confidence
         )
         overflow = len(accepted) > self._settings.review_max_findings
         partial = overflow or token_reduced
         routed = tuple(
             item.model_copy(
-                update={
-                    "inline_eligible": item.confidence >= self._settings.review_inline_confidence
-                }
+                update={"inline_eligible": item.confidence >= effective.inline_confidence}
             )
             for item in accepted[: self._settings.review_max_findings]
         )
@@ -563,6 +598,7 @@ class ReviewGenerationService:
             ),
             now=current_time,
             source_fragments=source_fragments,
+            warning=warning,
         )
         await self._repository.persist_artifact(artifact, ReviewRunState.GENERATION_ATTEMPTED)
         await self._repository.transition_call(
