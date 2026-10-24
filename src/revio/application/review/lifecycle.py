@@ -56,6 +56,7 @@ from revio.domain.reviews import NormalizedReviewArtifact, UsageDisposition
 from revio.errors import (
     IncompleteReviewInputError,
     MalformedProviderOutputError,
+    PersistenceIntegrityError,
     ProviderCallAmbiguousError,
     ProviderCallObservedInvalidResponseError,
     ProviderCallObservedTerminalError,
@@ -63,6 +64,8 @@ from revio.errors import (
     ProviderCallSafeRetryError,
     ProviderCallTerminalError,
     ProviderTransientError,
+    ProviderWriteAmbiguousError,
+    ProviderWriteRejectedError,
 )
 from revio.ports.ai import AIFindingRevalidator
 from revio.ports.scm import (
@@ -387,6 +390,215 @@ class FindingLifecycleService:
                     ThreadLinkState.DISCOVERY_INDETERMINATE,
                     now,
                 )
+
+    async def resolve_threads(
+        self,
+        *,
+        run_id: str,
+        current: ChangeRequest,
+        validated_head: str,
+        now: datetime,
+    ) -> None:
+        """Resolve only linked threads of durable fixed findings at the exact latest head.
+
+        Re-fetches the change request first; a newer head supersedes lifecycle writes and
+        leaves every finding open. Each operation performs at most one mutation, verified by
+        reread; ambiguous outcomes reconcile read-only and never repeat the mutation.
+        """
+        if self._thread_resolver is None:
+            return
+        fixed = [
+            result
+            for result in await self._repository.revalidation_results(run_id)
+            if result.outcome == RevalidationOutcome.FIXED and result.fetched_ref == validated_head
+        ]
+        if not fixed:
+            return
+        refreshed = await self._reader.get_change_request(current.target)
+        if refreshed.head_sha != validated_head:
+            return
+        for result in fixed:
+            link = await self._repository.get_thread_link(result.finding_record_id)
+            if (
+                link is None
+                or link.state != ThreadLinkState.LINKED
+                or link.provider_thread_node_id is None
+            ):
+                continue
+            finding = await self._repository.get_finding(result.finding_record_id)
+            if finding is None or finding.state != FindingLifecycleState.OPEN:
+                continue
+            await self._resolve_one(
+                run_id=run_id,
+                target=current.target,
+                finding_record_id=result.finding_record_id,
+                thread_node_id=link.provider_thread_node_id,
+                head_sha=validated_head,
+                now=now,
+            )
+
+    async def _resolve_one(
+        self,
+        *,
+        run_id: str,
+        target: ChangeRequestTarget,
+        finding_record_id: str,
+        thread_node_id: str,
+        head_sha: str,
+        now: datetime,
+    ) -> None:
+        assert self._thread_resolver is not None
+        try:
+            op = await self._repository.reserve_resolution_operation(
+                operation_id=_id("resolution-op", f"{run_id}:{finding_record_id}"),
+                finding_record_id=finding_record_id,
+                provider_thread_node_id=thread_node_id,
+                head_sha=head_sha,
+                now=now,
+            )
+        except PersistenceIntegrityError:
+            # Duplicate linkage or a node-id mismatch is an integrity failure: never resolve.
+            await self._repository.mark_finding_indeterminate(finding_record_id, now)
+            return
+
+        if op.state in {ThreadResolutionState.COMPLETED, ThreadResolutionState.RECONCILED}:
+            await self._repository.mark_finding_resolved(
+                finding_record_id, head_sha=head_sha, now=now
+            )
+            return
+        if op.state in {
+            ThreadResolutionState.KNOWN_REJECTED,
+            ThreadResolutionState.INTEGRITY_FAILED,
+        }:
+            return
+        if op.state == ThreadResolutionState.AMBIGUOUS:
+            await self._reconcile_resolution(
+                op, target, finding_record_id, thread_node_id, head_sha, now
+            )
+            return
+        if op.state == ThreadResolutionState.ATTEMPT_STARTED:
+            await self._repository.transition_resolution_operation(
+                op.id,
+                ThreadResolutionState.ATTEMPT_STARTED,
+                ThreadResolutionState.AMBIGUOUS,
+                now,
+                terminal_reason="attempt_recovered_ambiguous",
+            )
+            await self._reconcile_resolution(
+                op, target, finding_record_id, thread_node_id, head_sha, now
+            )
+            return
+
+        # reserved_unattempted: completely reread the thread before any mutation.
+        read = await self._thread_resolver.read_thread(target, thread_node_id=thread_node_id)
+        if read.found and read.is_resolved and read.collection_complete:
+            await self._repository.transition_resolution_operation(
+                op.id,
+                ThreadResolutionState.RESERVED_UNATTEMPTED,
+                ThreadResolutionState.RECONCILED,
+                now,
+                provider_observed_state="resolved",
+            )
+            await self._repository.mark_finding_resolved(
+                finding_record_id, head_sha=head_sha, now=now
+            )
+            return
+        if not read.collection_complete:
+            # The current state could not be confirmed; leave reserved and open for a later run.
+            return
+        if not read.found:
+            await self._repository.transition_resolution_operation(
+                op.id,
+                ThreadResolutionState.RESERVED_UNATTEMPTED,
+                ThreadResolutionState.INTEGRITY_FAILED,
+                now,
+                terminal_reason="linked_thread_absent",
+            )
+            await self._repository.mark_finding_indeterminate(finding_record_id, now)
+            return
+
+        if not await self._repository.transition_resolution_operation(
+            op.id,
+            ThreadResolutionState.RESERVED_UNATTEMPTED,
+            ThreadResolutionState.ATTEMPT_STARTED,
+            now,
+            increment_attempt=True,
+        ):
+            return
+        try:
+            await self._thread_resolver.resolve_thread(target, thread_node_id=thread_node_id)
+        except ProviderWriteAmbiguousError:
+            await self._repository.transition_resolution_operation(
+                op.id,
+                ThreadResolutionState.ATTEMPT_STARTED,
+                ThreadResolutionState.AMBIGUOUS,
+                now,
+                terminal_reason="resolve_ambiguous",
+            )
+            await self._reconcile_resolution(
+                op, target, finding_record_id, thread_node_id, head_sha, now
+            )
+            return
+        except ProviderWriteRejectedError:
+            await self._repository.transition_resolution_operation(
+                op.id,
+                ThreadResolutionState.ATTEMPT_STARTED,
+                ThreadResolutionState.KNOWN_REJECTED,
+                now,
+                terminal_reason="resolve_rejected",
+            )
+            return
+        # Observed success must be verified by a complete reread before completing.
+        verify = await self._thread_resolver.read_thread(target, thread_node_id=thread_node_id)
+        if verify.found and verify.is_resolved and verify.collection_complete:
+            await self._repository.transition_resolution_operation(
+                op.id,
+                ThreadResolutionState.ATTEMPT_STARTED,
+                ThreadResolutionState.COMPLETED,
+                now,
+                provider_observed_state="resolved",
+            )
+            await self._repository.mark_finding_resolved(
+                finding_record_id, head_sha=head_sha, now=now
+            )
+            return
+        await self._repository.transition_resolution_operation(
+            op.id,
+            ThreadResolutionState.ATTEMPT_STARTED,
+            ThreadResolutionState.AMBIGUOUS,
+            now,
+            terminal_reason="resolve_unverified",
+        )
+        await self._reconcile_resolution(
+            op, target, finding_record_id, thread_node_id, head_sha, now
+        )
+
+    async def _reconcile_resolution(
+        self,
+        op: ThreadResolutionOperation,
+        target: ChangeRequestTarget,
+        finding_record_id: str,
+        thread_node_id: str,
+        head_sha: str,
+        now: datetime,
+    ) -> None:
+        assert self._thread_resolver is not None
+        read = await self._thread_resolver.read_thread(target, thread_node_id=thread_node_id)
+        if read.found and read.is_resolved and read.collection_complete:
+            await self._repository.transition_resolution_operation(
+                op.id,
+                ThreadResolutionState.AMBIGUOUS,
+                ThreadResolutionState.RECONCILED,
+                now,
+                provider_observed_state="resolved",
+            )
+            await self._repository.mark_finding_resolved(
+                finding_record_id, head_sha=head_sha, now=now
+            )
+            return
+        # Without proof of resolution the mutation is never repeated; the finding is left
+        # resolution_indeterminate and the operation stays ambiguous for a future reread.
+        await self._repository.mark_finding_indeterminate(finding_record_id, now)
 
     async def deduplicate(
         self,
