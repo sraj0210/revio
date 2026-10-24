@@ -10,7 +10,7 @@ from alembic.config import Config
 
 from revio.adapters.persistence.sqlite import SQLiteStore
 from revio.adapters.persistence.sqlite.locks import MaintenanceLock
-from revio.application.retention import retain_terminal_history
+from revio.application.retention import retain_closed_findings, retain_terminal_history
 from revio.config.database import DatabaseSettings
 from revio.errors import PersistenceUnavailableError, RetentionIntegrityError
 
@@ -26,6 +26,11 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--execute", action="store_true")
     retention.add_argument("--backup-confirmed", action="store_true")
+    findings = subparsers.add_parser("prune-findings")
+    findings_mode = findings.add_mutually_exclusive_group(required=True)
+    findings_mode.add_argument("--dry-run", action="store_true")
+    findings_mode.add_argument("--execute", action="store_true")
+    findings.add_argument("--backup-confirmed", action="store_true")
     return parser
 
 
@@ -40,6 +45,27 @@ async def _retain(settings: DatabaseSettings, dry_run: bool) -> None:
     print(
         json.dumps(
             {"jobs": result.jobs, "attempts": result.attempts, "deliveries": result.deliveries}
+        )
+    )
+
+
+async def _retain_findings(settings: DatabaseSettings, dry_run: bool) -> None:
+    store = SQLiteStore(settings)
+    result = await retain_closed_findings(
+        store,
+        age_days=settings.retention_closed_finding_age_days,
+        batch_size=settings.retention_batch_size,
+        dry_run=dry_run,
+    )
+    print(
+        json.dumps(
+            {
+                "findings": result.findings,
+                "occurrences": result.occurrences,
+                "links": result.links,
+                "operations": result.operations,
+                "results": result.results,
+            }
         )
     )
 
@@ -74,6 +100,16 @@ def main() -> None:
             command.current(Config("alembic.ini"), verbose=True)
         elif args.command == "check":
             raise SystemExit(asyncio.run(_check(settings)))
+        elif args.command == "prune-findings":
+            if args.execute and not args.backup_confirmed:
+                raise SystemExit("--backup-confirmed is required for execution")
+            try:
+                if args.execute:
+                    asyncio.run(_checkpoint(settings))
+                asyncio.run(_retain_findings(settings, args.dry_run))
+            except (PersistenceUnavailableError, RetentionIntegrityError):
+                print("closed-finding retention failed safely", file=sys.stderr)
+                raise SystemExit(1) from None
         else:
             if args.execute and not args.backup_confirmed:
                 raise SystemExit("--backup-confirmed is required for execution")

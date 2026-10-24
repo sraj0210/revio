@@ -196,6 +196,7 @@ class RecordingWriter:
         findings: tuple[Finding, ...],
         marker: str,
         commit_id: str,
+        markers: tuple[str, ...] = (),
     ) -> str:
         self.publish_calls += 1
         self.published_findings.append(findings)

@@ -179,6 +179,83 @@ class GitHubClient:
         self.raise_for_response(response)
         return response
 
+    async def graphql_query(
+        self, installation_id: int, query: str, variables: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Perform one bounded same-origin GraphQL read; transport failures are transient."""
+        current_path = self.relative_url("/graphql")
+        token = await self._cache.get(installation_id, self._refresh)
+        try:
+            response = await self._http.post(
+                current_path,
+                json={"query": query, "variables": variables},
+                headers={"Authorization": f"Bearer {token.get_secret_value()}"},
+                follow_redirects=False,
+            )
+        except httpx.TimeoutException:
+            raise GitHubTransportError("GitHub GraphQL request timed out") from None
+        except httpx.HTTPError:
+            raise GitHubTransportError("GitHub GraphQL request failed") from None
+        if response.status_code != 200:
+            self.raise_for_response(response)
+            raise GitHubResponseError("GitHub GraphQL response was not accepted")
+        try:
+            raw = cast(object, response.json())
+        except (ValueError, TypeError):
+            raise GitHubResponseError("GitHub GraphQL response is malformed") from None
+        if not isinstance(raw, dict):
+            raise GitHubResponseError("GitHub GraphQL response is malformed")
+        body = cast(dict[str, Any], raw)
+        if body.get("errors"):
+            raise GitHubResponseError("GitHub GraphQL query returned errors")
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise GitHubResponseError("GitHub GraphQL response has no data")
+        return cast(dict[str, Any], data)
+
+    async def graphql_mutation(
+        self, installation_id: int, query: str, variables: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Perform one non-redirected GraphQL mutation; transport uncertainty stays explicit."""
+        from revio.adapters.scm.github.errors import (
+            GitHubAmbiguousWriteError,
+            GitHubValidationError,
+        )
+
+        current_path = self.relative_url("/graphql")
+        token = await self._cache.get(installation_id, self._refresh)
+        try:
+            response = await self._http.post(
+                current_path,
+                json={"query": query, "variables": variables},
+                headers={"Authorization": f"Bearer {token.get_secret_value()}"},
+                follow_redirects=False,
+            )
+        except (httpx.TimeoutException, httpx.HTTPError):
+            raise GitHubAmbiguousWriteError(
+                "GitHub GraphQL mutation outcome is ambiguous"
+            ) from None
+        if response.status_code in {301, 302, 307, 308, 401} or response.status_code >= 500:
+            raise GitHubAmbiguousWriteError("GitHub GraphQL mutation response is ambiguous")
+        if response.status_code != 200:
+            self.raise_for_response(response)
+            raise GitHubValidationError("GitHub GraphQL mutation was rejected")
+        try:
+            raw = cast(object, response.json())
+        except (ValueError, TypeError):
+            raise GitHubAmbiguousWriteError(
+                "GitHub GraphQL mutation response is malformed"
+            ) from None
+        if not isinstance(raw, dict):
+            raise GitHubAmbiguousWriteError("GitHub GraphQL mutation response is malformed")
+        body = cast(dict[str, Any], raw)
+        if body.get("errors"):
+            raise GitHubValidationError("GitHub GraphQL mutation returned errors")
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise GitHubValidationError("GitHub GraphQL mutation returned no data")
+        return cast(dict[str, Any], data)
+
     @staticmethod
     def _is_anchor_validation(response: httpx.Response) -> bool:
         try:

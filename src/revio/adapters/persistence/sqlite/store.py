@@ -14,16 +14,21 @@ from revio.adapters.persistence.sqlite.connection import (
     FailureHook,
     SQLiteConnectionPolicy,
 )
+from revio.adapters.persistence.sqlite.findings import SQLiteFindingLifecycleRepository
 from revio.adapters.persistence.sqlite.ingress import SQLiteIngressRepository
 from revio.adapters.persistence.sqlite.installations import SQLiteInstallationRepository
 from revio.adapters.persistence.sqlite.queue import SQLiteQueueRepository
 from revio.adapters.persistence.sqlite.readiness import SQLiteReadinessRepository
-from revio.adapters.persistence.sqlite.retention import SQLiteTerminalRetentionRepository
+from revio.adapters.persistence.sqlite.retention import (
+    SQLiteFindingRetentionRepository,
+    SQLiteTerminalRetentionRepository,
+)
 from revio.adapters.persistence.sqlite.reviews import SQLiteReviewRepository
 from revio.adapters.persistence.sqlite.schema import SCHEMA_REVISION, SCHEMA_SQL
 from revio.config.database import DatabaseSettings
 from revio.config.queue import QueueSettings
 from revio.domain.events import WebhookNormalizationResult
+from revio.domain.lifecycle import FindingRetentionResult
 from revio.domain.queue import (
     IngressReceipt,
     InstallationState,
@@ -63,7 +68,11 @@ class SQLiteStore:
         self._readiness = SQLiteReadinessRepository(self._connections)
         self.reviews = SQLiteReviewRepository(self._connections)
         self.configurations = SQLiteConfigurationRepository(self._connections)
+        self.findings = SQLiteFindingLifecycleRepository(self._connections)
         self._retention = SQLiteTerminalRetentionRepository(
+            self._connections, self._readiness.check_capabilities
+        )
+        self._finding_retention = SQLiteFindingRetentionRepository(
             self._connections, self._readiness.check_capabilities
         )
 
@@ -164,6 +173,21 @@ class SQLiteStore:
         correlation_id: str,
     ) -> RetentionResult:
         return await self._retention.retain_terminal_history(
+            cutoff=cutoff,
+            batch_size=batch_size,
+            dry_run=dry_run,
+            correlation_id=correlation_id,
+        )
+
+    async def retain_closed_findings(
+        self,
+        *,
+        cutoff: datetime,
+        batch_size: int,
+        dry_run: bool,
+        correlation_id: str,
+    ) -> FindingRetentionResult:
+        return await self._finding_retention.retain_closed_findings(
             cutoff=cutoff,
             batch_size=batch_size,
             dry_run=dry_run,

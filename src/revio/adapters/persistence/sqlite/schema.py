@@ -1,6 +1,6 @@
-"""SQLite schema and invariants through Phase 5."""
+"""SQLite schema and invariants through Phase 6."""
 
-SCHEMA_REVISION = "0003_phase5_repository_configuration"
+SCHEMA_REVISION = "0004_phase6_finding_lifecycle"
 ACTIVE_STATES = "'pending', 'running', 'retry_wait'"
 TERMINAL_STATES = "'completed', 'dead', 'cancelled', 'superseded'"
 
@@ -260,7 +260,152 @@ CREATE INDEX IF NOT EXISTS ix_review_configurations_identity
 ON review_configurations(provider_id, installation_id, repository_id, base_sha);
 """
 
-SCHEMA_SQL = PHASE3_SCHEMA_SQL + PHASE4_SCHEMA_SQL + PHASE5_SCHEMA_SQL
+PHASE6_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS finding_records (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    installation_id TEXT NOT NULL,
+    repository_id TEXT NOT NULL,
+    external_number INTEGER NOT NULL CHECK(external_number > 0),
+    fingerprint_version TEXT NOT NULL,
+    primary_fingerprint TEXT NOT NULL CHECK(length(primary_fingerprint) = 64),
+    secondary_fingerprint TEXT NOT NULL CHECK(length(secondary_fingerprint) = 64),
+    path TEXT NOT NULL,
+    category TEXT NOT NULL,
+    rule TEXT NOT NULL,
+    symbol TEXT,
+    evidence TEXT NOT NULL CHECK(length(evidence) BETWEEN 1 AND 512),
+    evidence_digest TEXT NOT NULL CHECK(length(evidence_digest) = 64),
+    state TEXT NOT NULL CHECK(state IN ('open', 'resolved', 'resolution_indeterminate')),
+    first_seen_run_id TEXT NOT NULL REFERENCES review_runs(id),
+    last_seen_run_id TEXT NOT NULL REFERENCES review_runs(id),
+    first_seen_head_sha TEXT NOT NULL,
+    last_seen_head_sha TEXT NOT NULL,
+    resolved_head_sha TEXT,
+    resolved_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(provider_id, installation_id, repository_id, external_number, primary_fingerprint),
+    CHECK((state = 'resolved' AND resolved_head_sha IS NOT NULL AND resolved_at IS NOT NULL)
+       OR (state <> 'resolved' AND resolved_head_sha IS NULL AND resolved_at IS NULL))
+);
+
+CREATE TABLE IF NOT EXISTS finding_occurrences (
+    finding_record_id TEXT NOT NULL REFERENCES finding_records(id) ON DELETE CASCADE,
+    review_run_id TEXT NOT NULL REFERENCES review_runs(id) ON DELETE CASCADE,
+    artifact_ordinal INTEGER NOT NULL CHECK(artifact_ordinal >= 0),
+    observed_head_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    line INTEGER CHECK(line IS NULL OR line > 0),
+    disposition TEXT NOT NULL CHECK(disposition IN (
+        'new', 'exact_duplicate', 'selected_prior', 'unselected_prior'
+    )),
+    publication_eligible INTEGER NOT NULL CHECK(publication_eligible IN (0, 1)),
+    comment_linked INTEGER NOT NULL DEFAULT 0 CHECK(comment_linked IN (0, 1)),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(finding_record_id, review_run_id)
+);
+
+CREATE TABLE IF NOT EXISTS review_thread_links (
+    finding_record_id TEXT PRIMARY KEY REFERENCES finding_records(id) ON DELETE CASCADE,
+    review_run_id TEXT REFERENCES review_runs(id),
+    provider_review_id TEXT,
+    provider_thread_node_id TEXT,
+    provider_comment_id TEXT,
+    marker_digest TEXT NOT NULL UNIQUE,
+    marker_version TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'pending_discovery', 'linked', 'not_threaded', 'discovery_indeterminate'
+    )),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(provider_thread_node_id),
+    CHECK((state = 'linked' AND provider_thread_node_id IS NOT NULL)
+       OR (state <> 'linked'))
+);
+
+CREATE TABLE IF NOT EXISTS finding_revalidation_runs (
+    review_run_id TEXT PRIMARY KEY REFERENCES review_runs(id) ON DELETE CASCADE,
+    validated_head_sha TEXT NOT NULL,
+    selection_limit INTEGER NOT NULL CHECK(selection_limit >= 0),
+    selected_count INTEGER NOT NULL CHECK(selected_count >= 0),
+    unselected_count INTEGER NOT NULL CHECK(unselected_count >= 0),
+    policy_digest TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('selected', 'completed', 'superseded')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS finding_revalidation_results (
+    review_run_id TEXT NOT NULL REFERENCES review_runs(id) ON DELETE CASCADE,
+    finding_record_id TEXT NOT NULL REFERENCES finding_records(id) ON DELETE CASCADE,
+    outcome TEXT NOT NULL CHECK(outcome IN ('fixed', 'still_present', 'uncertain')),
+    reason_code TEXT NOT NULL,
+    fetched_ref TEXT,
+    current_path TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(review_run_id, finding_record_id)
+);
+
+CREATE TABLE IF NOT EXISTS revalidation_calls (
+    id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL REFERENCES review_runs(id) ON DELETE CASCADE,
+    batch_ordinal INTEGER NOT NULL CHECK(batch_ordinal > 0),
+    provider_id TEXT NOT NULL,
+    model_profile_id TEXT NOT NULL,
+    model_profile_version TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    estimated_input_tokens INTEGER NOT NULL CHECK(estimated_input_tokens >= 0),
+    state TEXT NOT NULL CHECK(state IN (
+        'reserved', 'attempt_started', 'response_observed', 'ambiguous',
+        'retryable_rejected', 'terminal_rejected', 'known_rejected', 'completed'
+    )),
+    usage_status TEXT CHECK(usage_status IS NULL OR usage_status IN ('known', 'unknown')),
+    uncached_input_tokens INTEGER CHECK(uncached_input_tokens >= 0),
+    cached_input_tokens INTEGER CHECK(cached_input_tokens >= 0),
+    cache_creation_tokens INTEGER CHECK(cache_creation_tokens >= 0),
+    output_tokens INTEGER CHECK(output_tokens >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(review_run_id, batch_ordinal),
+    CHECK(usage_status IS NULL
+       OR (usage_status = 'known' AND uncached_input_tokens IS NOT NULL
+           AND cached_input_tokens IS NOT NULL AND cache_creation_tokens IS NOT NULL
+           AND output_tokens IS NOT NULL)
+       OR (usage_status = 'unknown' AND uncached_input_tokens IS NULL
+           AND cached_input_tokens IS NULL AND cache_creation_tokens IS NULL
+           AND output_tokens IS NULL))
+);
+
+CREATE TABLE IF NOT EXISTS thread_resolution_operations (
+    id TEXT PRIMARY KEY,
+    finding_record_id TEXT NOT NULL UNIQUE REFERENCES finding_records(id) ON DELETE CASCADE,
+    provider_thread_node_id TEXT NOT NULL UNIQUE,
+    validated_head_sha TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'reserved_unattempted', 'attempt_started', 'known_rejected', 'ambiguous',
+        'reconciled', 'completed', 'integrity_failed'
+    )),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    provider_observed_state TEXT,
+    terminal_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_finding_records_scope
+ON finding_records(provider_id, installation_id, repository_id, external_number, state);
+CREATE INDEX IF NOT EXISTS ix_finding_records_resolved
+ON finding_records(state, resolved_at) WHERE state = 'resolved';
+CREATE INDEX IF NOT EXISTS ix_finding_occurrences_run
+ON finding_occurrences(review_run_id);
+CREATE INDEX IF NOT EXISTS ix_revalidation_results_finding
+ON finding_revalidation_results(finding_record_id);
+"""
+
+SCHEMA_SQL = PHASE3_SCHEMA_SQL + PHASE4_SCHEMA_SQL + PHASE5_SCHEMA_SQL + PHASE6_SCHEMA_SQL
 
 ACTIVE_JOB_INSERT_SQL = f"""
 INSERT INTO queue_jobs (

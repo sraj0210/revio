@@ -3,6 +3,7 @@
 from typing import Protocol, runtime_checkable
 
 from revio.domain.identifiers import ChangeRequestTarget
+from revio.domain.lifecycle import ThreadDiscoveryResult, ThreadReadResult
 from revio.domain.models import ChangeRequest, DiffCollection, Finding, TreeCollection
 from revio.domain.reviews import ReconciliationResult, ReviewStatusDetails
 
@@ -32,11 +33,16 @@ class ReviewStatusPort(Protocol):
 
 
 class ThreadReaderPort(Protocol):
-    async def list_review_threads(self, target: ChangeRequestTarget) -> list[str]: ...
+    async def discover_thread(
+        self, target: ChangeRequestTarget, *, marker: str
+    ) -> ThreadDiscoveryResult: ...
 
 
 class ThreadResolverPort(Protocol):
-    async def resolve_thread(self, target: ChangeRequestTarget, thread_id: str) -> None: ...
+    async def read_thread(
+        self, target: ChangeRequestTarget, *, thread_node_id: str
+    ) -> ThreadReadResult: ...
+    async def resolve_thread(self, target: ChangeRequestTarget, *, thread_node_id: str) -> None: ...
 
 
 class ThreadReplyPort(Protocol):
@@ -80,4 +86,5 @@ class ReviewWriterPort(Protocol):
         findings: tuple[Finding, ...],
         marker: str,
         commit_id: str,
+        markers: tuple[str, ...] = (),
     ) -> str: ...

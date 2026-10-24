@@ -89,6 +89,17 @@ class SQLiteReadinessRepository:
                     "WHEN 'created' THEN 'active' WHEN 'unsuspend' THEN 'active' "
                     "WHEN 'suspend' THEN 'suspended' WHEN 'deleted' THEN 'deleted' "
                     "ELSE NULL END LIMIT 1",
+                    # Phase 6 lifecycle integrity: an integrity-failed thread resolution operation
+                    # (duplicate linkage, node-id mismatch, or a linked-but-absent thread) is a
+                    # terminal contradiction that requires operator intervention and fails readiness
+                    # closed. Self-healing contradictions (for example a completed operation whose
+                    # finding resolution is reconciled on the next run) are deliberately excluded so
+                    # a crash window never deadlocks worker startup.
+                    "SELECT 1 FROM thread_resolution_operations WHERE state='integrity_failed' "
+                    "LIMIT 1",
+                    # A linked thread must carry a provider thread node id.
+                    "SELECT 1 FROM review_thread_links WHERE state='linked' "
+                    "AND provider_thread_node_id IS NULL LIMIT 1",
                 )
                 for query in integrity_queries:
                     if list(await connection.execute_fetchall(query)):
