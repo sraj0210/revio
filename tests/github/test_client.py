@@ -9,6 +9,7 @@ from pydantic import SecretStr
 from revio.adapters.scm.github.auth import GitHubAppJWT, InstallationTokenCache, load_private_key
 from revio.adapters.scm.github.client import GitHubClient
 from revio.adapters.scm.github.errors import (
+    GitHubAnchorValidationRejectedError,
     GitHubAuthenticationError,
     GitHubNotFoundError,
     GitHubPermissionError,
@@ -267,6 +268,47 @@ async def test_transport_timeout_is_typed(rsa_private_key_pem: str) -> None:
         with pytest.raises(GitHubTransportError) as caught:
             await client.get(9, "/resource")
     assert "unsafe-provider-detail" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "error_type"),
+    [
+        (
+            {
+                "message": "Validation Failed",
+                "errors": [
+                    {
+                        "resource": "PullRequestReviewComment",
+                        "field": "line",
+                        "code": "invalid",
+                    }
+                ],
+            },
+            GitHubAnchorValidationRejectedError,
+        ),
+        ({"message": "Validation Failed", "errors": []}, GitHubValidationError),
+        ({"message": "spam"}, GitHubValidationError),
+        ("unrecognized", GitHubValidationError),
+    ],
+)
+async def test_review_write_422_requires_positive_anchor_metadata(
+    rsa_private_key_pem: str, body: object, error_type: type[Exception]
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return token_response()
+        return httpx.Response(422, json=body)
+
+    client, http = client_for(rsa_private_key_pem, httpx.MockTransport(handler))
+    async with http:
+        with pytest.raises(error_type):
+            await client.write(
+                9,
+                "POST",
+                "/repos/owner/repo/pulls/1/reviews",
+                json_body={"event": "COMMENT"},
+            )
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,9 @@ from revio.adapters.scm.github.adapter import GitHubReadAdapter
 from revio.adapters.scm.github.auth import GitHubAppJWT, InstallationTokenCache, load_private_key
 from revio.adapters.scm.github.client import GitHubClient
 from revio.adapters.scm.github.factory import github_adapter_bundle
+from revio.adapters.scm.github.publishing import GitHubReviewWriter
 from revio.config.github import GitHubSettings
+from revio.config.review import ReviewSettings
 from revio.registries import SCMAdapterBundle
 
 
@@ -20,6 +22,8 @@ class GitHubComposition:
     token_cache: InstallationTokenCache
     http: httpx.AsyncClient
     owns_http: bool
+    client: GitHubClient
+    writer: GitHubReviewWriter | None = None
 
     async def close(self) -> None:
         if self.owns_http:
@@ -27,7 +31,10 @@ class GitHubComposition:
 
 
 def compose_github(
-    settings: GitHubSettings, *, http: httpx.AsyncClient | None = None
+    settings: GitHubSettings,
+    *,
+    http: httpx.AsyncClient | None = None,
+    review_settings: ReviewSettings | None = None,
 ) -> GitHubComposition:
     if not settings.github_enabled or settings.github_app_id is None:
         raise ValueError("GitHub adapter is not enabled")
@@ -59,4 +66,22 @@ def compose_github(
         max_pages=settings.github_max_pages,
         max_items=settings.github_max_items,
     )
-    return GitHubComposition(adapter, github_adapter_bundle(adapter), cache, client_http, owns_http)
+    writer = (
+        GitHubReviewWriter(
+            client,
+            settings.github_app_id,
+            max_pages=settings.github_max_pages,
+            max_items=settings.github_max_items,
+        )
+        if review_settings is not None and review_settings.review_publish_enabled
+        else None
+    )
+    return GitHubComposition(
+        adapter,
+        github_adapter_bundle(adapter, writer),
+        cache,
+        client_http,
+        owns_http,
+        client,
+        writer,
+    )

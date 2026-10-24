@@ -71,3 +71,60 @@ class RetentionIntegrityError(PersistenceError):
 
 class ProviderTransientError(RevioError):
     """A provider read may be retried safely."""
+
+    def __init__(self, message: str, *, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ProviderCallAmbiguousError(RevioError):
+    """A provider call may have been accepted without a trustworthy response."""
+
+
+class ProviderCallRejectedError(RevioError):
+    """A provider explicitly rejected a call before producing a result."""
+
+
+class ProviderCallSafeRetryError(ProviderTransientError):
+    """A Messages request was explicitly rejected without generation and may retry."""
+
+
+class ProviderCallTerminalError(RevioError):
+    """A provider outcome is terminal for generation but maps to a safe partial artifact."""
+
+
+class ProviderCallObservedTerminalError(RevioError):
+    """A trustworthy Messages response was observed but cannot produce a usable review."""
+
+    def __init__(self, message: str, *, usage: object, reason: str) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.reason = reason
+
+
+class ProviderCallObservedInvalidResponseError(RevioError):
+    """A 2xx Messages response was observed but cannot be normalized safely."""
+
+
+class MalformedProviderOutputError(RevioError):
+    """A trustworthy provider response failed local semantic validation."""
+
+    def __init__(self, message: str, *, usage: object) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
+class ReconciliationIntegrityError(RevioError):
+    """Provider reconciliation returned contradictory exact identities."""
+
+
+class ProviderWriteAmbiguousError(RevioError):
+    """A provider write may have succeeded without a trustworthy response."""
+
+
+class ProviderWriteRejectedError(RevioError):
+    """A provider proved that a write did not create an object."""
+
+
+class ProviderAnchorRejectedError(ProviderWriteRejectedError):
+    """A review POST was positively rejected for invalid inline anchors."""
