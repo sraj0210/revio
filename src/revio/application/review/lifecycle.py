@@ -274,6 +274,12 @@ class PublicationProjection:
         )
 
     @property
+    def summary_pairs(self) -> tuple[tuple[Finding, str], ...]:
+        return tuple(
+            (finding, record_id) for finding, record_id in self.new if not finding.inline_eligible
+        )
+
+    @property
     def summary_findings(self) -> tuple[Finding, ...]:
         return tuple(finding for finding, _ in self.new if not finding.inline_eligible)
 

@@ -18,6 +18,7 @@ from revio.application.queue.service import QueueWorker
 from revio.application.repository_configuration import RepositoryConfigurationExecutor
 from revio.application.review.execution import ReviewGenerationService
 from revio.application.review.job import ReviewJobExecutor
+from revio.application.review.lifecycle import FindingLifecycleService
 from revio.application.review.markers import load_marker_key, marker_key_id
 from revio.config.anthropic import AnthropicSettings
 from revio.config.database import DatabaseSettings
@@ -98,6 +99,25 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                 credential_cache = GitHubCredentialCache(github.token_cache)
                 if anthropic is not None and review_profile is None:
                     raise RuntimeError("review model profile was not resolved")
+                lifecycle = (
+                    FindingLifecycleService(
+                        store.findings,
+                        github.adapter,
+                        github.adapter,
+                        revalidator=anthropic,
+                        thread_reader=github.thread_reader,
+                        thread_resolver=github.thread_resolver,
+                        marker_key=active_marker_key,
+                    )
+                    if (
+                        anthropic is not None
+                        and review_settings.review_publish_enabled
+                        and active_marker_key is not None
+                        and github.thread_reader is not None
+                        and github.thread_resolver is not None
+                    )
+                    else None
+                )
                 processor = QueueProcessor(
                     store,
                     providers,
@@ -117,6 +137,7 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                                 writer=github.writer,
                                 marker_key=active_marker_key,
                                 configuration_repository=store.configurations,
+                                lifecycle=lifecycle,
                             ),
                             review_settings,
                         )

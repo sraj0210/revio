@@ -86,4 +86,5 @@ class ReviewWriterPort(Protocol):
         findings: tuple[Finding, ...],
         marker: str,
         commit_id: str,
+        markers: tuple[str, ...] = (),
     ) -> str: ...

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Literal, Protocol, cast
 
 from revio.application.review.execution import ReviewGenerationService, build_artifact
+from revio.application.review.lifecycle import FindingLifecycleService, PublicationProjection
 from revio.application.review.markers import marker_key_id, review_marker
 from revio.config.review import ReviewSettings
 from revio.domain.capabilities import ResolvedModelProfile
@@ -49,6 +50,24 @@ def publication_summary(artifact: NormalizedReviewArtifact) -> str:
     return f"{artifact.summary}\n\nSummary findings:\n{rendered}"[:8000]
 
 
+NO_NEW_FINDINGS_SUMMARY = "No new findings were published; matching findings are already tracked."
+
+
+def lifecycle_publication_summary(
+    artifact: NormalizedReviewArtifact, projection: PublicationProjection | None
+) -> str:
+    """Publication summary covering only new summary-routed findings for Phase 6."""
+    if projection is None:
+        return publication_summary(artifact)
+    summary_findings = projection.summary_findings
+    if not summary_findings:
+        return artifact.summary
+    rendered = "\n".join(
+        f"- {finding.title}: {finding.explanation}" for finding in summary_findings
+    )
+    return f"{artifact.summary}\n\nSummary findings:\n{rendered}"[:8000]
+
+
 class ConfigurationLinkRepository(Protocol):
     async def link_run(self, job_id: str, run_id: str, now: datetime) -> bool: ...
 
@@ -65,6 +84,7 @@ class ReviewJobExecutor:
         writer: ReviewWriterPort | None = None,
         marker_key: bytes | None = None,
         configuration_repository: ConfigurationLinkRepository | None = None,
+        lifecycle: FindingLifecycleService | None = None,
     ) -> None:
         self._repository = repository
         self._reader = reader
@@ -74,8 +94,15 @@ class ReviewJobExecutor:
         self._writer = writer
         self._marker_key = marker_key
         self._configuration_repository = configuration_repository
+        self._lifecycle = lifecycle
         if settings.review_publish_enabled and (writer is None or marker_key is None):
             raise ValueError("publishing requires GitHub writer and marker key")
+
+    def _effective_policy(self, policy: EffectiveReviewPolicy | None) -> EffectiveReviewPolicy:
+        return policy or EffectiveReviewPolicy(
+            summary_confidence=self._settings.review_summary_confidence,
+            inline_confidence=self._settings.review_inline_confidence,
+        )
 
     async def _apply_policy_warning(
         self,
@@ -312,6 +339,8 @@ class ReviewJobExecutor:
         diff: DiffCollection,
         check: WriteOperationRecord,
         now: datetime,
+        *,
+        projection: PublicationProjection | None = None,
     ) -> Literal[
         "completed",
         "partial",
@@ -322,6 +351,18 @@ class ReviewJobExecutor:
         assert self._writer is not None and self._marker_key is not None
         target = lease.job.event.change_request
         assert target is not None
+        summary_text = lifecycle_publication_summary(artifact, projection)
+        if projection is not None and self._lifecycle is not None:
+            inline_candidates = tuple(finding for finding, _ in projection.inline)
+            marker_of = {
+                finding: self._lifecycle.finding_marker(record_id)
+                for finding, record_id in projection.inline
+            }
+        else:
+            inline_candidates = tuple(
+                finding for finding in artifact.findings if finding.inline_eligible
+            )
+            marker_of = {}
         current = await self._reader.get_change_request(target)
         if current.head_sha != check.head_sha:
             if not await self._finish_check_or_indeterminate(
@@ -391,7 +432,7 @@ class ReviewJobExecutor:
                 lease,
                 check,
                 artifact,
-                publication_summary(artifact),
+                summary_text,
                 now,
                 neutral=artifact.partial,
             ):
@@ -415,14 +456,12 @@ class ReviewJobExecutor:
                 reason="incomplete_reconciliation",
             )
             return "publication_indeterminate"
-        inline_candidates = tuple(
-            finding for finding in artifact.findings if finding.inline_eligible
-        )
         findings = (
             ()
             if artifact.partial
             else self._writer.validate_inline_findings(inline_candidates, diff)
         )
+        markers = tuple(marker_of[finding] for finding in findings) if marker_of else ()
         if len(findings) != len(inline_candidates):
             previous_digest = artifact.digest
             replacement = build_artifact(
@@ -440,6 +479,7 @@ class ReviewJobExecutor:
                 raise RuntimeError("review artifact anchor downgrade lost its CAS race")
             artifact = replacement
             findings = ()
+            markers = ()
         if not await self._repository.transition_write_operation(
             "publish",
             operation.id,
@@ -452,10 +492,11 @@ class ReviewJobExecutor:
         try:
             provider_id = await self._writer.publish_review(
                 target,
-                summary=publication_summary(artifact),
+                summary=summary_text,
                 findings=findings,
                 marker=marker,
                 commit_id=current.head_sha,
+                markers=markers,
             )
         except ProviderAnchorRejectedError:
             await self._repository.transition_write_operation(
@@ -510,7 +551,7 @@ class ReviewJobExecutor:
                     lease,
                     check,
                     artifact,
-                    publication_summary(artifact),
+                    summary_text,
                     now,
                     neutral=artifact.partial,
                 ):
@@ -550,7 +591,7 @@ class ReviewJobExecutor:
             try:
                 provider_id = await self._writer.publish_review(
                     target,
-                    summary=publication_summary(artifact),
+                    summary=summary_text,
                     findings=(),
                     marker=marker,
                     commit_id=current.head_sha,
@@ -651,7 +692,7 @@ class ReviewJobExecutor:
             lease,
             check,
             artifact,
-            publication_summary(artifact),
+            summary_text,
             now,
             neutral=artifact.partial,
         ):
@@ -776,7 +817,9 @@ class ReviewJobExecutor:
                 current_time,
             ):
                 raise RuntimeError("review run could not enter publishing")
-        outcome = await self._publish(lease, artifact, diff, check, current_time)
+        outcome = await self._publish_with_lifecycle(
+            lease, run.id, current, artifact, diff, check, policy, current_time
+        )
         if outcome in {"completed", "partial"}:
             if not await self._repository.transition_run(
                 run.id,
@@ -786,3 +829,111 @@ class ReviewJobExecutor:
             ):
                 raise RuntimeError("review run terminal transition failed")
         return outcome
+
+    async def _publish_with_lifecycle(
+        self,
+        lease: JobLease,
+        run_id: str,
+        current: ChangeRequest,
+        artifact: NormalizedReviewArtifact,
+        diff: DiffCollection,
+        check: WriteOperationRecord,
+        policy: EffectiveReviewPolicy | None,
+        now: datetime,
+    ) -> Literal[
+        "completed",
+        "partial",
+        "superseded",
+        "publication_indeterminate",
+        "check_run_indeterminate",
+    ]:
+        if self._lifecycle is None:
+            return await self._publish(lease, artifact, diff, check, now)
+        effective = self._effective_policy(policy)
+        # 1. Deduplicate and project only-new findings (never for a partial artifact).
+        projection = None
+        if not artifact.partial:
+            projection = await self._lifecycle.deduplicate(
+                run_id=run_id, current=current, artifact=artifact, diff=diff, now=now
+            )
+        # 2. Select priors, collect latest-head evidence, and revalidate durably.
+        superseded = await self._lifecycle.run_revalidation(
+            run_id=run_id,
+            current=current,
+            diff=diff,
+            policy=effective,
+            profile=self._profile,
+            now=now,
+        )
+        if superseded:
+            return await self._finish_superseded(lease, run_id, check, artifact, now)
+        # 3a. No new publishable findings on a complete run: finish the Check Run without a POST.
+        if projection is not None and not projection.has_new:
+            current_again = await self._reader.get_change_request(current.target)
+            if current_again.head_sha != check.head_sha:
+                return await self._finish_superseded(lease, run_id, check, artifact, now)
+            summary = NO_NEW_FINDINGS_SUMMARY
+            if effective.warning_text is not None:
+                summary = f"{effective.warning_text}\n\n{summary}"
+            if not await self._finish_check_or_indeterminate(
+                lease, check, artifact, summary, now, neutral=False
+            ):
+                return "check_run_indeterminate"
+            await self._lifecycle.resolve_threads(
+                run_id=run_id, current=current, validated_head=current.head_sha, now=now
+            )
+            return "completed"
+        # 3b. Publish only the new findings (with per-finding markers).
+        outcome = await self._publish(lease, artifact, diff, check, now, projection=projection)
+        # 4. Register links, discover threads, and resolve confirmed-fixed priors.
+        if outcome in {"completed", "partial"} and projection is not None:
+            if outcome == "completed":
+                for _, record_id in projection.inline:
+                    await self._lifecycle.register_pending_link(
+                        run_id=run_id, finding_record_id=record_id, provider_review_id=None, now=now
+                    )
+                for _, record_id in projection.summary_pairs:
+                    await self._lifecycle.register_not_threaded(
+                        run_id=run_id, finding_record_id=record_id, now=now
+                    )
+                await self._lifecycle.discover_and_link(
+                    run_id=run_id, target=current.target, now=now
+                )
+            else:
+                # An anchor downgrade published summary-only; new findings are not threaded.
+                for _, record_id in projection.new:
+                    await self._lifecycle.register_not_threaded(
+                        run_id=run_id, finding_record_id=record_id, now=now
+                    )
+        if outcome in {"completed", "partial"}:
+            await self._lifecycle.resolve_threads(
+                run_id=run_id, current=current, validated_head=current.head_sha, now=now
+            )
+        return outcome
+
+    async def _finish_superseded(
+        self,
+        lease: JobLease,
+        run_id: str,
+        check: WriteOperationRecord,
+        artifact: NormalizedReviewArtifact,
+        now: datetime,
+    ) -> Literal["superseded", "check_run_indeterminate"]:
+        if not await self._finish_check_or_indeterminate(
+            lease,
+            check,
+            artifact,
+            "Superseded by newer head.",
+            now,
+            neutral=True,
+            indeterminate_reason="superseded_terminal_check_indeterminate",
+        ):
+            return "check_run_indeterminate"
+        await self._repository.transition_run(
+            run_id,
+            ReviewRunState.PUBLISHING,
+            ReviewRunState.SUPERSEDED,
+            now,
+            reason="newer_head_during_revalidation",
+        )
+        return "superseded"

@@ -271,18 +271,25 @@ class GitHubReviewWriter:
         findings: tuple[Finding, ...],
         marker: str,
         commit_id: str,
+        markers: tuple[str, ...] = (),
     ) -> str:
         installation, root, number = self._target(target)
-        comments = [
-            {
-                "path": finding.path,
-                "line": finding.line,
-                "side": "RIGHT",
-                "body": f"**{finding.title}**\n\n{finding.explanation}"[:4000],
-            }
-            for finding in findings
-            if finding.line is not None
-        ]
+        comments: list[dict[str, Any]] = []
+        for index, finding in enumerate(findings):
+            if finding.line is None:
+                continue
+            body = f"**{finding.title}**\n\n{finding.explanation}"[:4000]
+            if index < len(markers):
+                # Append the hidden per-finding marker so the thread can later be discovered.
+                body = f"{body}\n\n{markers[index]}"
+            comments.append(
+                {
+                    "path": finding.path,
+                    "line": finding.line,
+                    "side": "RIGHT",
+                    "body": body,
+                }
+            )
         response = await self._client.write(
             installation,
             "POST",
