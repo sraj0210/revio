@@ -7,10 +7,12 @@ discovery, and ambiguity-safe thread resolution. It never blocks publication of 
 findings and never performs an unsafe repeated external write.
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from revio.domain.capabilities import ResolvedModelProfile
 from revio.domain.configuration import EffectiveReviewPolicy, path_is_excluded
 from revio.domain.identifiers import ChangeRequestTarget
 from revio.domain.lifecycle import (
@@ -29,14 +31,30 @@ from revio.domain.lifecycle import (
     ThreadResolutionOperation,
     ThreadResolutionState,
 )
-from revio.domain.models import ChangeRequest, DiffCollection
+from revio.domain.models import ChangeRequest, DiffCollection, TokenUsage
+from revio.domain.revalidation import FindingRevalidationRequest, RevalidationRequestItem
 from revio.domain.reviews import UsageDisposition
-from revio.errors import ProviderTransientError
+from revio.errors import (
+    IncompleteReviewInputError,
+    MalformedProviderOutputError,
+    ProviderCallAmbiguousError,
+    ProviderCallObservedInvalidResponseError,
+    ProviderCallObservedTerminalError,
+    ProviderCallRejectedError,
+    ProviderCallSafeRetryError,
+    ProviderCallTerminalError,
+    ProviderTransientError,
+)
+from revio.ports.ai import AIFindingRevalidator
 from revio.ports.scm import ChangeRequestReadPort, RepositoryContentReadPort
 
 SELECTION_LIMIT = 25
 PER_FILE_BYTE_LIMIT = 128 * 1024
 AGGREGATE_BYTE_LIMIT = 512 * 1024
+# Duplicated from the Anthropic adapter to avoid an application->adapter dependency; both must
+# stay in sync, exactly like the review prompt/schema version constants.
+REVALIDATION_PROMPT_VERSION = "revalidation-v1"
+REVALIDATION_SCHEMA_VERSION = "revalidation-v1"
 
 REASON_SELECTED = "selected"
 REASON_POLICY_EXCLUDED = "policy_excluded"
@@ -48,6 +66,23 @@ REASON_CONTENT_UNAVAILABLE = "content_unavailable"
 REASON_AGGREGATE_LIMIT = "aggregate_limit"
 REASON_PATH_INVALID = "path_invalid"
 REASON_SUPERSEDED = "superseded"
+REASON_REVALIDATION_LIMIT = "revalidation_limit"
+REASON_REVALIDATION_AMBIGUOUS = "revalidation_ambiguous"
+REASON_REVALIDATION_MALFORMED = "revalidation_malformed"
+REASON_REVALIDATION_REJECTED = "revalidation_rejected"
+REASON_REVALIDATION_UNAVAILABLE = "revalidation_unavailable"
+REASON_RESPONSE_RECOVERY = "response_recovery_unavailable"
+
+
+def _id(namespace: str, value: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"revio:{namespace}:{value}"))
+
+
+def _estimated_tokens(payload: dict[str, object]) -> int:
+    value = payload.get("_revio_estimated_input_tokens", 0)
+    if not isinstance(value, int) or value < 0:
+        raise RuntimeError("revalidation preflight returned an invalid token estimate")
+    return value
 
 
 class LifecycleRepository(Protocol):
@@ -215,10 +250,13 @@ class FindingLifecycleService:
         repository: LifecycleRepository,
         reader: ChangeRequestReadPort,
         content: RepositoryContentReadPort,
+        *,
+        revalidator: AIFindingRevalidator | None = None,
     ) -> None:
         self._repository = repository
         self._reader = reader
         self._content = content
+        self._revalidator = revalidator
 
     async def select_priors(
         self,
@@ -362,6 +400,338 @@ class FindingLifecycleService:
             aggregate += encoded_length
             outcome.items.append((record, content))
         return outcome
+
+    async def run_revalidation(
+        self,
+        *,
+        run_id: str,
+        current: ChangeRequest,
+        diff: DiffCollection,
+        policy: EffectiveReviewPolicy,
+        profile: ResolvedModelProfile,
+        now: datetime,
+    ) -> bool:
+        """Select, collect, and revalidate priors. Returns True when the run was superseded."""
+        existing = await self._repository.get_revalidation_run(run_id)
+        if existing is not None and existing.state == RevalidationRunState.COMPLETED:
+            return False
+        if existing is not None and existing.state == RevalidationRunState.SUPERSEDED:
+            return True
+        selection = await self.select_priors(
+            run_id=run_id, current=current, diff=diff, policy=policy, now=now
+        )
+        if not selection.selected:
+            await self._complete_run(run_id, now)
+            return False
+        content = await self.collect_content(
+            run_id=run_id,
+            target=current.target,
+            validated_head=current.head_sha,
+            selected=selection.selected,
+            policy=policy,
+            now=now,
+        )
+        if content.superseded:
+            await self._repository.transition_revalidation_run(
+                run_id, RevalidationRunState.SELECTED, RevalidationRunState.SUPERSEDED, now
+            )
+            return True
+        await self._revalidate_batch(
+            run_id=run_id,
+            head_sha=current.head_sha,
+            items=content.items,
+            profile=profile,
+            now=now,
+        )
+        await self._complete_run(run_id, now)
+        return False
+
+    async def _complete_run(self, run_id: str, now: datetime) -> None:
+        run = await self._repository.get_revalidation_run(run_id)
+        if run is not None and run.state == RevalidationRunState.SELECTED:
+            await self._repository.transition_revalidation_run(
+                run_id, RevalidationRunState.SELECTED, RevalidationRunState.COMPLETED, now
+            )
+
+    async def _revalidate_batch(
+        self,
+        *,
+        run_id: str,
+        head_sha: str,
+        items: list[tuple[FindingRecord, str]],
+        profile: ResolvedModelProfile,
+        now: datetime,
+    ) -> None:
+        if not items:
+            return
+        if self._revalidator is None:
+            for record, _ in items:
+                await self._persist_uncertain(
+                    run_id, record, REASON_REVALIDATION_UNAVAILABLE, head_sha, now
+                )
+            return
+        record_by_id = {record.id: record for record, _ in items}
+        request_items = [
+            RevalidationRequestItem(
+                finding_id=record.id,
+                path=record.path,
+                rule=record.rule,
+                symbol=record.symbol,
+                evidence=record.evidence,
+                current_file_content=content,
+            )
+            for record, content in items
+        ]
+        existing = await self._repository.latest_revalidation_call(run_id)
+        payload: dict[str, object] | None = None
+        while request_items:
+            request = FindingRevalidationRequest(
+                head_sha=head_sha, items=tuple(request_items), model_profile=profile
+            )
+            try:
+                payload = await self._revalidator.preflight_revalidation(request)
+                break
+            except IncompleteReviewInputError:
+                dropped = request_items.pop()
+                await self._persist_uncertain(
+                    run_id,
+                    record_by_id[dropped.finding_id],
+                    REASON_REVALIDATION_LIMIT,
+                    head_sha,
+                    now,
+                )
+        if not request_items or payload is None:
+            return
+        batch_ids = [item.finding_id for item in request_items]
+
+        ordinal = 1 if existing is None else existing.identity.batch_ordinal
+        if existing is not None and existing.state == RevalidationCallState.RETRYABLE_REJECTED:
+            ordinal += 1
+            existing = None
+        identity = RevalidationCallIdentity(
+            id=_id("revalidation-call", f"{run_id}:{ordinal}"),
+            review_run_id=run_id,
+            batch_ordinal=ordinal,
+            provider_id=str(profile.provider_id),
+            model_profile_id=profile.alias.value,
+            model_profile_version=profile.profile_version,
+            prompt_version=REVALIDATION_PROMPT_VERSION,
+            schema_version=REVALIDATION_SCHEMA_VERSION,
+            estimated_input_tokens=_estimated_tokens(payload),
+        )
+        call = existing or await self._repository.reserve_revalidation_call(identity, now)
+
+        if call.state == RevalidationCallState.ATTEMPT_STARTED:
+            await self._repository.transition_revalidation_call(
+                call.identity.id,
+                RevalidationCallState.ATTEMPT_STARTED,
+                RevalidationCallState.AMBIGUOUS,
+                now,
+                usage=UsageDisposition(status="unknown"),
+            )
+            await self._mark_batch_uncertain(
+                run_id, batch_ids, REASON_REVALIDATION_AMBIGUOUS, head_sha, now
+            )
+            return
+        if call.state == RevalidationCallState.RESPONSE_OBSERVED:
+            await self._mark_batch_uncertain(
+                run_id, batch_ids, REASON_RESPONSE_RECOVERY, head_sha, now
+            )
+            await self._repository.transition_revalidation_call(
+                call.identity.id,
+                RevalidationCallState.RESPONSE_OBSERVED,
+                RevalidationCallState.COMPLETED,
+                now,
+            )
+            return
+        if call.state == RevalidationCallState.AMBIGUOUS:
+            await self._mark_batch_uncertain(
+                run_id, batch_ids, REASON_REVALIDATION_AMBIGUOUS, head_sha, now
+            )
+            return
+        if call.state in {
+            RevalidationCallState.TERMINAL_REJECTED,
+            RevalidationCallState.KNOWN_REJECTED,
+        }:
+            await self._mark_batch_uncertain(
+                run_id, batch_ids, REASON_REVALIDATION_REJECTED, head_sha, now
+            )
+            return
+        if call.state == RevalidationCallState.COMPLETED:
+            return
+
+        if not await self._repository.transition_revalidation_call(
+            call.identity.id,
+            RevalidationCallState.RESERVED,
+            RevalidationCallState.ATTEMPT_STARTED,
+            now,
+        ):
+            raise RuntimeError("revalidation attempt could not start")
+        try:
+            batch = await self._revalidator.generate_revalidation(payload)
+        except ProviderCallSafeRetryError:
+            await self._repository.transition_revalidation_call(
+                call.identity.id,
+                RevalidationCallState.ATTEMPT_STARTED,
+                RevalidationCallState.RETRYABLE_REJECTED,
+                now,
+            )
+            raise
+        except ProviderCallAmbiguousError:
+            await self._repository.transition_revalidation_call(
+                call.identity.id,
+                RevalidationCallState.ATTEMPT_STARTED,
+                RevalidationCallState.AMBIGUOUS,
+                now,
+                usage=UsageDisposition(status="unknown"),
+            )
+            await self._mark_batch_uncertain(
+                run_id, batch_ids, REASON_REVALIDATION_AMBIGUOUS, head_sha, now
+            )
+            return
+        except ProviderCallObservedTerminalError as error:
+            usage = error.usage if isinstance(error.usage, TokenUsage) else None
+            if usage is None:
+                raise RuntimeError("observed terminal revalidation lacked usage") from None
+            await self._observe_then_complete(
+                call.identity.id,
+                run_id,
+                batch_ids,
+                REASON_REVALIDATION_MALFORMED,
+                head_sha,
+                usage,
+                now,
+            )
+            return
+        except ProviderCallObservedInvalidResponseError:
+            await self._repository.transition_revalidation_call(
+                call.identity.id,
+                RevalidationCallState.ATTEMPT_STARTED,
+                RevalidationCallState.RESPONSE_OBSERVED,
+                now,
+                usage=UsageDisposition(status="unknown"),
+            )
+            await self._mark_batch_uncertain(
+                run_id, batch_ids, REASON_REVALIDATION_MALFORMED, head_sha, now
+            )
+            await self._repository.transition_revalidation_call(
+                call.identity.id,
+                RevalidationCallState.RESPONSE_OBSERVED,
+                RevalidationCallState.COMPLETED,
+                now,
+            )
+            return
+        except MalformedProviderOutputError as error:
+            usage = error.usage if isinstance(error.usage, TokenUsage) else None
+            if usage is None:
+                raise RuntimeError("malformed revalidation output lacked usage") from None
+            await self._observe_then_complete(
+                call.identity.id,
+                run_id,
+                batch_ids,
+                REASON_REVALIDATION_MALFORMED,
+                head_sha,
+                usage,
+                now,
+            )
+            return
+        except (ProviderCallRejectedError, ProviderCallTerminalError):
+            await self._repository.transition_revalidation_call(
+                call.identity.id,
+                RevalidationCallState.ATTEMPT_STARTED,
+                RevalidationCallState.TERMINAL_REJECTED,
+                now,
+            )
+            await self._mark_batch_uncertain(
+                run_id, batch_ids, REASON_REVALIDATION_REJECTED, head_sha, now
+            )
+            return
+
+        await self._repository.transition_revalidation_call(
+            call.identity.id,
+            RevalidationCallState.ATTEMPT_STARTED,
+            RevalidationCallState.RESPONSE_OBSERVED,
+            now,
+            usage=UsageDisposition(status="known", usage=batch.usage),
+        )
+        by_id: dict[str, RevalidationOutcome] = {}
+        current_paths: dict[str, str | None] = {}
+        valid = True
+        for item in batch.results:
+            if item.finding_id not in record_by_id or item.finding_id in by_id:
+                valid = False
+                break
+            by_id[item.finding_id] = item.outcome
+            current_paths[item.finding_id] = item.current_path
+        if valid and set(by_id) != set(batch_ids):
+            valid = False
+        if not valid:
+            await self._mark_batch_uncertain(
+                run_id, batch_ids, REASON_REVALIDATION_MALFORMED, head_sha, now
+            )
+        else:
+            for finding_id in batch_ids:
+                outcome = by_id[finding_id]
+                await self._repository.persist_revalidation_result(
+                    FindingRevalidationResult(
+                        review_run_id=run_id,
+                        finding_record_id=finding_id,
+                        outcome=outcome,
+                        reason_code=f"model_{outcome}",
+                        fetched_ref=head_sha,
+                        current_path=current_paths[finding_id],
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+        await self._repository.transition_revalidation_call(
+            call.identity.id,
+            RevalidationCallState.RESPONSE_OBSERVED,
+            RevalidationCallState.COMPLETED,
+            now,
+        )
+
+    async def _observe_then_complete(
+        self,
+        call_id: str,
+        run_id: str,
+        batch_ids: list[str],
+        reason: str,
+        head_sha: str,
+        usage: TokenUsage,
+        now: datetime,
+    ) -> None:
+        await self._repository.transition_revalidation_call(
+            call_id,
+            RevalidationCallState.ATTEMPT_STARTED,
+            RevalidationCallState.RESPONSE_OBSERVED,
+            now,
+            usage=UsageDisposition(status="known", usage=usage),
+        )
+        await self._mark_batch_uncertain(run_id, batch_ids, reason, head_sha, now)
+        await self._repository.transition_revalidation_call(
+            call_id,
+            RevalidationCallState.RESPONSE_OBSERVED,
+            RevalidationCallState.COMPLETED,
+            now,
+        )
+
+    async def _mark_batch_uncertain(
+        self, run_id: str, finding_ids: list[str], reason: str, fetched_ref: str, now: datetime
+    ) -> None:
+        for finding_id in finding_ids:
+            await self._repository.persist_revalidation_result(
+                FindingRevalidationResult(
+                    review_run_id=run_id,
+                    finding_record_id=finding_id,
+                    outcome=RevalidationOutcome.UNCERTAIN,
+                    reason_code=reason,
+                    fetched_ref=fetched_ref,
+                    current_path=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
 
     async def _persist_uncertain(
         self,
