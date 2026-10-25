@@ -41,4 +41,4 @@ def test_memory_is_bounded() -> None:
     for i in range(10):
         assert limiter.allow(f"source-{i}") is True
     # The table was cleared when the cap was exceeded; it never grows unbounded.
-    assert len(limiter._windows) <= 4
+    assert limiter.tracked_sources <= 4

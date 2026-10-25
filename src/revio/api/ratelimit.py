@@ -25,6 +25,10 @@ class FixedWindowRateLimiter:
         self._clock = clock or time.monotonic
         self._windows: dict[str, tuple[float, int]] = {}
 
+    @property
+    def tracked_sources(self) -> int:
+        return len(self._windows)
+
     def allow(self, source: str) -> bool:
         """Return True if the source is within its per-window limit, else False."""
         if self._limit <= 0:
