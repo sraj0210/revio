@@ -8,6 +8,7 @@ import sys
 from typing import cast
 
 from revio.adapters.ai.anthropic import AnthropicReviewAdapter, anthropic_model_profile
+from revio.adapters.observability import configure_logging
 from revio.adapters.persistence.sqlite import SQLiteStore
 from revio.adapters.persistence.sqlite.locks import MaintenanceLock, WorkerInstanceLock
 from revio.adapters.scm.github import GITHUB_PROVIDER_ID
@@ -45,6 +46,7 @@ def resolve_review_profile(settings: ReviewSettings):
 
 
 async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
+    configure_logging()
     database = DatabaseSettings()
     queue = QueueSettings()
     store = SQLiteStore(database, queue)

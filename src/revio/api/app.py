@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from revio.adapters.observability import configure_logging
 from revio.adapters.persistence.sqlite import SQLiteStore
 from revio.adapters.persistence.sqlite.locks import MaintenanceLock
 from revio.adapters.scm.github import GITHUB_PROVIDER_ID
@@ -30,6 +31,7 @@ def create_app(
     review_settings: ReviewSettings | None = None,
 ) -> FastAPI:
     """Build and configure the Revio ASGI application."""
+    configure_logging()
     github_settings = settings or GitHubSettings()
     review_policy = review_settings or ReviewSettings()
     registry = ProviderRegistry()
