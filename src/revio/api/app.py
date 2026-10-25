@@ -13,7 +13,8 @@ from revio.adapters.persistence.sqlite.locks import MaintenanceLock
 from revio.adapters.scm.github import GITHUB_PROVIDER_ID
 from revio.adapters.scm.github.composition import GitHubComposition, compose_github
 from revio.adapters.scm.github.webhook.ingress import GitHubSandboxWebhookIngress
-from revio.adapters.scm.github.webhook.route import router as github_webhook_router
+from revio.adapters.scm.github.webhook.provider import GitHubWebhookIngressProvider
+from revio.adapters.scm.github.webhook.route import router as webhook_router
 from revio.api.ratelimit import FixedWindowRateLimiter
 from revio.api.routes.health import router as health_router
 from revio.api.routes.readiness import router as readiness_router
@@ -23,6 +24,7 @@ from revio.config.github import GitHubSettings
 from revio.config.observability import ObservabilitySettings
 from revio.config.queue import QueueSettings
 from revio.config.review import ReviewSettings
+from revio.ports.webhook import WebhookIngressProvider
 from revio.registries import ProviderRegistry
 
 
@@ -94,14 +96,25 @@ def create_app(
     application.state.review_settings = review_policy
     application.state.provider_registry = registry
     application.state.github_composition = github
-    application.state.github_webhook_ingress = (
-        GitHubSandboxWebhookIngress(github.token_cache) if github is not None else None
-    )
     application.state.durable_ingress = durable
     application.state.persistence = durable
     application.state.ingress_rate_limiter = FixedWindowRateLimiter(
         limit=observability.ingress_rate_limit,
         window_seconds=observability.ingress_rate_window_seconds,
     )
-    application.include_router(github_webhook_router)
+    webhook_providers: dict[str, WebhookIngressProvider] = {}
+    if github_settings.github_webhook_mode != "disabled":
+        sandbox = (
+            GitHubSandboxWebhookIngress(github.token_cache)
+            if github is not None and github_settings.github_webhook_mode == "sandbox"
+            else None
+        )
+        webhook_providers[GITHUB_PROVIDER_ID.value] = GitHubWebhookIngressProvider(
+            github_settings,
+            durable=durable,
+            sandbox=sandbox,
+            token_cache=github.token_cache if github is not None else None,
+        )
+    application.state.webhook_providers = webhook_providers
+    application.include_router(webhook_router)
     return application

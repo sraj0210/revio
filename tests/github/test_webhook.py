@@ -219,6 +219,17 @@ async def test_malformed_payload_secret_is_absent_from_api_response(
 
 
 @pytest.mark.asyncio
+async def test_unknown_provider_returns_not_found(rsa_private_key_pem: str) -> None:
+    body = json.dumps(pull_payload()).encode()
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app(settings(rsa_private_key_pem))),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/webhooks/gitlab", content=body, headers=headers(body))
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_unsupported_action_returns_generic_ignored(rsa_private_key_pem: str) -> None:
     body = json.dumps(pull_payload("closed")).encode()
     async with AsyncClient(

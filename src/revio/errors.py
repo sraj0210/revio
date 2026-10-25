@@ -61,6 +61,10 @@ class InvalidJobError(RevioError):
     """A durable job cannot be decoded or processed safely."""
 
 
+class InvalidWebhookPayloadError(RevioError):
+    """A webhook's headers or payload could not be accepted safely."""
+
+
 class LeaseLostError(RevioError):
     """The worker no longer owns the lease required for a state transition."""
 

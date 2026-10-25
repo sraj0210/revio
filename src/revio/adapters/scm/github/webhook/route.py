@@ -1,9 +1,14 @@
-"""Signed sandbox or durable GitHub webhook ingress route."""
+"""Provider-routable signed webhook ingress route.
+
+A single generic endpoint dispatches to any registered SCM webhook provider. The provider owns
+authentication, header extraction, normalization, sandbox handling, and the installation hook; this
+route owns the shared, provider-neutral flow: route/media-type/byte limits, rate limiting, durable
+persistence, and the fail-closed exception mapping.
+"""
 
 import hashlib
 import json
 import logging
-import re
 import uuid
 from datetime import UTC, datetime
 from email.message import Message
@@ -12,32 +17,21 @@ from typing import Any, cast
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from revio.adapters.scm.github.errors import GitHubResponseError
-from revio.adapters.scm.github.webhook.ingress import GitHubSandboxWebhookIngress
-from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
-from revio.adapters.scm.github.webhook.signature import verify_signature
 from revio.api.ratelimit import FixedWindowRateLimiter
-from revio.config.github import GitHubSettings
 from revio.domain.queue import IngressDisposition
 from revio.errors import (
     InvalidJobError,
+    InvalidWebhookPayloadError,
     PersistenceIndeterminateError,
     PersistenceIntegrityError,
     PersistenceNotCommittedError,
     PersistenceUnavailableError,
     QueueCapacityError,
 )
-from revio.ports.persistence import DurableIngressPort
+from revio.ports.webhook import WebhookIngressProvider
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-_HEADER = re.compile(r"^[A-Za-z0-9_.:-]+$")
-
-
-def _header(value: str | None, name: str) -> str:
-    if value is None or len(value) > 128 or not _HEADER.fullmatch(value):
-        raise HTTPException(status_code=400, detail=f"invalid {name} header")
-    return value
 
 
 def _json_media_type(value: str | None) -> bool:
@@ -62,51 +56,62 @@ async def _bounded_body(request: Request, limit: int) -> bytes:
     return bytes(body)
 
 
-@router.post("/webhooks/github")
-async def github_webhook(request: Request) -> JSONResponse:
-    correlation_id = uuid.uuid4().hex
-    settings: GitHubSettings = request.app.state.github_settings
-    if settings.github_webhook_mode == "disabled":
+def _provider(request: Request, name: str) -> WebhookIngressProvider:
+    providers: dict[str, WebhookIngressProvider] = getattr(
+        request.app.state, "webhook_providers", {}
+    )
+    provider = providers.get(name)
+    if provider is None or provider.mode == "disabled":
         raise HTTPException(status_code=404, detail="not found")
+    return provider
+
+
+@router.post("/webhooks/{provider}")
+async def scm_webhook(provider: str, request: Request) -> JSONResponse:
+    correlation_id = uuid.uuid4().hex
+    handler = _provider(request, provider)
+    if not _json_media_type(request.headers.get("content-type")):
+        raise HTTPException(status_code=415, detail="unsupported media type")
     limiter: FixedWindowRateLimiter | None = getattr(
         request.app.state, "ingress_rate_limiter", None
     )
     if limiter is not None:
         source = request.client.host if request.client is not None else "unknown"
         if not limiter.allow(source):
-            logger.warning("github_webhook_rate_limited", extra={"correlation_id": correlation_id})
+            logger.warning(
+                "webhook_rate_limited",
+                extra={"correlation_id": correlation_id, "provider_id": handler.provider_id},
+            )
             return JSONResponse(
                 status_code=429,
                 content={"status": "rate_limited"},
                 headers={"Retry-After": "1"},
             )
-    if not _json_media_type(request.headers.get("content-type")):
-        raise HTTPException(status_code=415, detail="unsupported media type")
-    body = await _bounded_body(request, settings.github_webhook_max_bytes)
-    signature = request.headers.get("x-hub-signature-256") or ""
-    secret = settings.github_webhook_secret
-    if secret is None or not verify_signature(body, signature, secret.get_secret_value()):
+    body = await _bounded_body(request, handler.max_bytes)
+    if not handler.authenticate(body, request.headers):
         raise HTTPException(status_code=401, detail="invalid signature")
-    delivery = _header(request.headers.get("x-github-delivery"), "delivery")
-    event_name = _header(request.headers.get("x-github-event"), "event").lower()
+    try:
+        delivery, event_name = handler.extract(request.headers)
+    except InvalidWebhookPayloadError:
+        raise HTTPException(status_code=400, detail="invalid webhook headers") from None
     try:
         decoded: Any = json.loads(body)
         if not isinstance(decoded, dict):
             raise ValueError
-        payload = cast(dict[str, Any], decoded)
+        payload = cast(dict[str, object], decoded)
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="invalid payload") from None
     try:
-        if settings.github_webhook_mode == "sandbox":
-            ingress: GitHubSandboxWebhookIngress = request.app.state.github_webhook_ingress
-            result = await ingress.process(event_name, delivery, payload)
-            status = result.disposition
+        if handler.mode == "sandbox":
+            status = await handler.sandbox_process(event_name, delivery, payload)
         else:
-            normalization = normalize_webhook(event_name, delivery, payload)
-            durable: DurableIngressPort = request.app.state.durable_ingress
+            durable = handler.durable
+            if durable is None:
+                raise HTTPException(status_code=404, detail="not found")
+            normalization = handler.normalize(event_name, delivery, payload)
             receipt = await durable.persist(
-                provider_id="github",
-                delivery_identity=f"github:{delivery}",
+                provider_id=handler.provider_id,
+                delivery_identity=f"{handler.provider_id}:{delivery}",
                 event_name=event_name,
                 payload_sha256=hashlib.sha256(body).hexdigest(),
                 normalization=normalization,
@@ -114,52 +119,45 @@ async def github_webhook(request: Request) -> JSONResponse:
             )
             if receipt.disposition == IngressDisposition.CONFLICT:
                 logger.warning(
-                    "github_webhook_delivery_integrity_conflict",
-                    extra={"correlation_id": correlation_id},
+                    "webhook_delivery_integrity_conflict",
+                    extra={"correlation_id": correlation_id, "provider_id": handler.provider_id},
                 )
                 raise HTTPException(status_code=409, detail="delivery integrity conflict")
-            event = normalization.event
-            if (
-                event is not None
-                and event.event_type == "installation"
-                and event.trigger in {"suspend", "deleted"}
-            ):
-                composition = request.app.state.github_composition
-                await composition.token_cache.invalidate(int(event.installation.external_id))
+            await handler.on_installation_change(normalization)
             status = "ignored" if receipt.disposition == IngressDisposition.IGNORED else "accepted"
-    except (GitHubResponseError, InvalidJobError):
+    except (InvalidWebhookPayloadError, InvalidJobError):
         raise HTTPException(status_code=400, detail="invalid payload") from None
     except QueueCapacityError:
         logger.warning(
-            "github_webhook_active_capacity_rejected",
-            extra={"correlation_id": correlation_id},
+            "webhook_active_capacity_rejected",
+            extra={"correlation_id": correlation_id, "provider_id": handler.provider_id},
         )
         return JSONResponse(
-            status_code=503,
-            content={"status": "not_accepted"},
-            headers={"Retry-After": "1"},
+            status_code=503, content={"status": "not_accepted"}, headers={"Retry-After": "1"}
         )
     except (PersistenceNotCommittedError, PersistenceUnavailableError):
         logger.warning(
-            "github_webhook_persistence_unavailable",
-            extra={"correlation_id": correlation_id},
+            "webhook_persistence_unavailable",
+            extra={"correlation_id": correlation_id, "provider_id": handler.provider_id},
         )
         return JSONResponse(
-            status_code=503,
-            content={"status": "not_accepted"},
-            headers={"Retry-After": "1"},
+            status_code=503, content={"status": "not_accepted"}, headers={"Retry-After": "1"}
         )
     except PersistenceIndeterminateError:
         logger.error(
-            "github_webhook_persistence_indeterminate",
-            extra={"correlation_id": correlation_id},
+            "webhook_persistence_indeterminate",
+            extra={"correlation_id": correlation_id, "provider_id": handler.provider_id},
         )
         return JSONResponse(status_code=500, content={"status": "indeterminate"})
     except PersistenceIntegrityError:
         logger.error(
-            "github_webhook_persistence_integrity_error",
-            extra={"correlation_id": correlation_id},
+            "webhook_persistence_integrity_error",
+            extra={"correlation_id": correlation_id, "provider_id": handler.provider_id},
         )
         return JSONResponse(status_code=500, content={"status": "integrity_error"})
-    logger.info("github_webhook_%s", status, extra={"correlation_id": correlation_id})
+    logger.info(
+        "webhook_%s",
+        status,
+        extra={"correlation_id": correlation_id, "provider_id": handler.provider_id},
+    )
     return JSONResponse(status_code=202, content={"status": status})
