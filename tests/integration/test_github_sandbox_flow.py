@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.scm.github.auth import InstallationToken, InstallationTokenCache
-from revio.adapters.scm.github.webhook.ingress import GitHubSandboxWebhookIngress
+from venaroq.adapters.scm.github.auth import InstallationToken, InstallationTokenCache
+from venaroq.adapters.scm.github.webhook.ingress import GitHubSandboxWebhookIngress
 
 
 @pytest.mark.asyncio

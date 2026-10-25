@@ -16,24 +16,24 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
-from revio.adapters.persistence.sqlite.connection import CoordinationHook, FailureHook
-from revio.adapters.persistence.sqlite.queue import INVALID_JOB_CLEANUP_BATCH_SIZE
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.adapters.scm.github import GITHUB_PROVIDER_ID
-from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
-from revio.api.app import create_app
-from revio.application.queue.processor import QueueProcessor
-from revio.application.queue.service import QueueWorker
-from revio.application.retention import retain_terminal_history
-from revio.cli import queue_status
-from revio.config.github import GitHubSettings
-from revio.config.queue import QueueSettings
-from revio.domain.capabilities import SCMCapabilities
-from revio.domain.identifiers import ChangeRequestTarget, InstallationRef
-from revio.domain.models import ChangeRequest, DiffCollection
-from revio.domain.queue import IngressDisposition, IngressReceipt, JobLease
-from revio.errors import PersistenceUnavailableError, QueueCapacityError, RetentionIntegrityError
-from revio.registries import ProviderRegistry, SCMAdapterBundle
+from venaroq.adapters.persistence.sqlite.connection import CoordinationHook, FailureHook
+from venaroq.adapters.persistence.sqlite.queue import INVALID_JOB_CLEANUP_BATCH_SIZE
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.adapters.scm.github import GITHUB_PROVIDER_ID
+from venaroq.adapters.scm.github.webhook.normalizer import normalize_webhook
+from venaroq.api.app import create_app
+from venaroq.application.queue.processor import QueueProcessor
+from venaroq.application.queue.service import QueueWorker
+from venaroq.application.retention import retain_terminal_history
+from venaroq.cli import queue_status
+from venaroq.config.github import GitHubSettings
+from venaroq.config.queue import QueueSettings
+from venaroq.domain.capabilities import SCMCapabilities
+from venaroq.domain.identifiers import ChangeRequestTarget, InstallationRef
+from venaroq.domain.models import ChangeRequest, DiffCollection
+from venaroq.domain.queue import IngressDisposition, IngressReceipt, JobLease
+from venaroq.errors import PersistenceUnavailableError, QueueCapacityError, RetentionIntegrityError
+from venaroq.registries import ProviderRegistry, SCMAdapterBundle
 
 
 class MigratedDatabase(Protocol):
@@ -716,8 +716,8 @@ def test_status_cli_reports_generic_sanitized_read_failure(
     assert sentinel not in repr(error)
     assert error.__cause__ is None
     assert error.__context__ is None
-    monkeypatch.setenv("REVIO_DATABASE_PATH", str(alembic_database.path))
-    monkeypatch.setattr(sys, "argv", ["revio-queue-status"])
+    monkeypatch.setenv("VENAROQ_DATABASE_PATH", str(alembic_database.path))
+    monkeypatch.setattr(sys, "argv", ["venaroq-queue-status"])
     with pytest.raises(SystemExit) as caught:
         queue_status.main()
     assert caught.value.code == 1

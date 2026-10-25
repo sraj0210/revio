@@ -9,16 +9,16 @@ from pathlib import Path
 import aiosqlite
 import pytest
 
-from revio.adapters.observability import InMemoryQueueMetrics
-from revio.adapters.persistence.sqlite.schema import ACTIVE_JOB_INSERT_SQL, LEASE_SQL
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
-from revio.application.retention import retain_terminal_history
-from revio.config.database import DatabaseSettings
-from revio.config.queue import QueueSettings
-from revio.domain.events import WebhookNormalizationResult
-from revio.domain.queue import IngressDisposition, InstallationStatus
-from revio.errors import (
+from venaroq.adapters.observability import InMemoryQueueMetrics
+from venaroq.adapters.persistence.sqlite.schema import ACTIVE_JOB_INSERT_SQL, LEASE_SQL
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.adapters.scm.github.webhook.normalizer import normalize_webhook
+from venaroq.application.retention import retain_terminal_history
+from venaroq.config.database import DatabaseSettings
+from venaroq.config.queue import QueueSettings
+from venaroq.domain.events import WebhookNormalizationResult
+from venaroq.domain.queue import IngressDisposition, InstallationStatus
+from venaroq.errors import (
     PersistenceUnavailableError,
     QueueCapacityError,
     RetentionIntegrityError,
@@ -73,7 +73,7 @@ def test_conflict_safe_sql_matches_migrated_partial_index() -> None:
 
 @pytest.mark.asyncio
 async def test_delivery_and_semantic_idempotency_and_hash_conflict(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     first = await _persist(store, "one", "a" * 64)
     duplicate = await _persist(store, "one", "a" * 64)
@@ -95,7 +95,7 @@ async def test_delivery_and_semantic_idempotency_and_hash_conflict(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_concurrent_delivery_and_lease_are_single_winner(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     receipts = await asyncio.gather(
         _persist(store, "same", "a" * 64), _persist(store, "same", "a" * 64)
@@ -113,7 +113,7 @@ async def test_concurrent_delivery_and_lease_are_single_winner(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_concurrent_same_delivery_different_hash_is_one_conflict(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     receipts = await asyncio.gather(
         _persist(store, "same", "a" * 64), _persist(store, "same", "b" * 64)
@@ -128,7 +128,7 @@ async def test_concurrent_same_delivery_different_hash_is_one_conflict(tmp_path:
 
 @pytest.mark.asyncio
 async def test_capacity_rolls_back_new_delivery_but_accepts_duplicate(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"), QueueSettings(queue_max_active_jobs=1))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"), QueueSettings(queue_max_active_jobs=1))
     await store.initialize()
     first = await _persist(store, "one", "a" * 64)
     with pytest.raises(QueueCapacityError):
@@ -140,7 +140,7 @@ async def test_capacity_rolls_back_new_delivery_but_accepts_duplicate(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_terminal_timestamp_releases_semantic_identity(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     first = await _persist(store, "one", "a" * 64)
     lease = await store.lease_next("worker", datetime.now(UTC))
@@ -155,7 +155,7 @@ async def test_terminal_timestamp_releases_semantic_identity(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_expired_lease_closes_attempt_and_is_recovered_once(tmp_path: Path) -> None:
     settings = QueueSettings(queue_lease_seconds=10, queue_heartbeat_seconds=4)
-    store = SQLiteStore(_database(tmp_path / "revio.db"), settings)
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"), settings)
     await store.initialize()
     await _persist(store, "one", "a" * 64)
     now = datetime.now(UTC)
@@ -180,7 +180,7 @@ async def test_final_expired_attempt_and_impossible_exhausted_states_become_dead
     tmp_path: Path,
 ) -> None:
     queue = QueueSettings(queue_lease_seconds=10, queue_heartbeat_seconds=4, queue_max_attempts=1)
-    store = SQLiteStore(_database(tmp_path / "revio.db"), queue)
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"), queue)
     await store.initialize()
     first = await _persist(store, "running", "a" * 64, head="running")
     now = datetime.now(UTC)
@@ -218,7 +218,7 @@ async def test_final_expired_attempt_and_impossible_exhausted_states_become_dead
 
 @pytest.mark.asyncio
 async def test_busy_retry_budget_is_bounded_and_consumes_no_job_attempt(tmp_path: Path) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     acquisitions = 0
 
     def count(stage: str) -> None:
@@ -263,7 +263,7 @@ async def test_injected_busy_exhaustion_is_bounded_before_transaction(tmp_path: 
 
     store = SQLiteStore(
         DatabaseSettings(
-            database_path=tmp_path / "revio.db",
+            database_path=tmp_path / "venaroq.db",
             database_busy_max_attempts=3,
             database_busy_max_elapsed_seconds=0.01,
         ),
@@ -278,7 +278,7 @@ async def test_injected_busy_exhaustion_is_bounded_before_transaction(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_lifecycle_uses_serialized_arrival_not_provider_timestamp(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
 
     async def lifecycle(delivery: str, action: str, updated_at: datetime) -> None:
@@ -315,7 +315,7 @@ async def test_lifecycle_uses_serialized_arrival_not_provider_timestamp(tmp_path
 async def test_lifecycle_missing_mixed_timestamps_and_duplicate_follow_arrival(
     tmp_path: Path,
 ) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
 
     async def lifecycle(
@@ -353,7 +353,7 @@ async def test_lifecycle_missing_mixed_timestamps_and_duplicate_follow_arrival(
 
 @pytest.mark.asyncio
 async def test_retention_creates_tombstone_and_overlap_fails_readiness(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     await _persist(store, "one", "a" * 64)
     lease = await store.lease_next("worker", datetime.now(UTC))
@@ -387,7 +387,7 @@ async def test_retention_creates_tombstone_and_overlap_fails_readiness(tmp_path:
 async def test_invalid_candidate_is_dead_and_next_valid_job_is_leased(
     tmp_path: Path, event_json: str | None, schema_version: int
 ) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     invalid = await _persist(store, "invalid", "a" * 64, head="invalid")
     valid = await _persist(store, "valid", "b" * 64, head="valid")
@@ -456,7 +456,7 @@ async def test_ingress_failure_stages_roll_back_atomically(tmp_path: Path, stage
         if enabled and current == stage:
             raise aiosqlite.OperationalError("injected database failure")
 
-    store = SQLiteStore(_database(tmp_path / "revio.db"), failure_hook=fail)
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"), failure_hook=fail)
     await store.initialize()
     with pytest.raises(PersistenceUnavailableError):
         await _persist(store, "failure", "a" * 64)
@@ -472,7 +472,7 @@ async def test_lifecycle_failure_rolls_back_delivery_and_state(tmp_path: Path) -
         if stage == "after_lifecycle_upsert":
             raise aiosqlite.OperationalError("injected database failure")
 
-    store = SQLiteStore(_database(tmp_path / "revio.db"), failure_hook=fail)
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"), failure_hook=fail)
     await store.initialize()
     normalization = normalize_webhook(
         "installation", "lifecycle", {"action": "suspend", "installation": {"id": 9}}
@@ -498,7 +498,7 @@ async def test_attempt_insert_failure_rolls_back_lease(tmp_path: Path) -> None:
         if enabled and stage == "after_attempt_insert":
             raise aiosqlite.OperationalError("injected database failure")
 
-    store = SQLiteStore(_database(tmp_path / "revio.db"), failure_hook=fail)
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"), failure_hook=fail)
     await store.initialize()
     receipt = await _persist(store, "attempt", "a" * 64)
     enabled = True
@@ -528,7 +528,7 @@ async def test_cancellation_before_commit_rolls_back_and_connection_reuses(
         if enabled and current == stage:
             raise asyncio.CancelledError
 
-    store = SQLiteStore(_database(tmp_path / "revio.db"), failure_hook=cancel)
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"), failure_hook=cancel)
     await store.initialize()
     with pytest.raises(asyncio.CancelledError):
         await _persist(store, "cancelled", "a" * 64)
@@ -542,7 +542,7 @@ async def test_cancellation_before_commit_rolls_back_and_connection_reuses(
 async def test_cancellation_during_delayed_commit_resolves_known_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     commit_started = asyncio.Event()
     release_commit = asyncio.Event()
@@ -569,7 +569,7 @@ async def test_cancellation_during_delayed_commit_resolves_known_commit(
 async def test_commit_failure_rolls_back_and_connection_reuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     original_commit = aiosqlite.Connection.commit
     fail_next = True
@@ -590,7 +590,7 @@ async def test_commit_failure_rolls_back_and_connection_reuses(
 
 @pytest.mark.asyncio
 async def test_concurrent_semantic_and_capacity_boundaries(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"), QueueSettings(queue_max_active_jobs=1))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"), QueueSettings(queue_max_active_jobs=1))
     await store.initialize()
     semantic = await asyncio.gather(
         _persist(store, "semantic-a", "a" * 64),
@@ -615,7 +615,7 @@ async def test_concurrent_semantic_and_capacity_boundaries(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_retention_matching_tombstone_and_conflict_batch_rollback(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     first = await _persist(store, "first", "a" * 64, head="first")
     first_lease = await store.lease_next("worker", datetime.now(UTC))
@@ -651,7 +651,7 @@ async def test_retention_matching_tombstone_and_conflict_batch_rollback(tmp_path
 async def test_retention_accepts_matching_existing_tombstone_and_replay(
     tmp_path: Path,
 ) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     await _persist(store, "matching", "a" * 64)
     lease = await store.lease_next("worker", datetime.now(UTC))
@@ -673,7 +673,7 @@ async def test_retention_accepts_matching_existing_tombstone_and_replay(
 
 @pytest.mark.asyncio
 async def test_retention_preserves_active_ignored_and_lifecycle_rows(tmp_path: Path) -> None:
-    store = SQLiteStore(_database(tmp_path / "revio.db"))
+    store = SQLiteStore(_database(tmp_path / "venaroq.db"))
     await store.initialize()
     terminal = await _persist(store, "terminal", "a" * 64, head="terminal")
     lease = await store.lease_next("worker", datetime.now(UTC))
@@ -714,7 +714,7 @@ async def test_bounded_phase3_metrics_are_emitted_without_identity_labels(
 ) -> None:
     metrics = InMemoryQueueMetrics()
     store = SQLiteStore(
-        _database(tmp_path / "revio.db"),
+        _database(tmp_path / "venaroq.db"),
         QueueSettings(queue_max_active_jobs=1),
         metrics=metrics,
     )

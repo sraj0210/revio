@@ -7,25 +7,25 @@ from pathlib import Path
 
 import pytest
 
-from revio.adapters.persistence.sqlite import SQLiteStore
-from revio.adapters.scm.github import GITHUB_PROVIDER_ID
-from revio.adapters.scm.github.errors import GitHubAuthenticationError, GitHubTransportError
-from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
-from revio.application.queue.processor import QueueProcessor
-from revio.application.queue.service import QueueWorker
-from revio.config.database import DatabaseSettings
-from revio.config.queue import QueueSettings
-from revio.domain.capabilities import SCMCapabilities
-from revio.domain.identifiers import ChangeRequestTarget, InstallationRef
-from revio.domain.models import ChangeRequest, DiffCollection
-from revio.domain.queue import JobLease
-from revio.errors import (
+from venaroq.adapters.persistence.sqlite import SQLiteStore
+from venaroq.adapters.scm.github import GITHUB_PROVIDER_ID
+from venaroq.adapters.scm.github.errors import GitHubAuthenticationError, GitHubTransportError
+from venaroq.adapters.scm.github.webhook.normalizer import normalize_webhook
+from venaroq.application.queue.processor import QueueProcessor
+from venaroq.application.queue.service import QueueWorker
+from venaroq.config.database import DatabaseSettings
+from venaroq.config.queue import QueueSettings
+from venaroq.domain.capabilities import SCMCapabilities
+from venaroq.domain.identifiers import ChangeRequestTarget, InstallationRef
+from venaroq.domain.models import ChangeRequest, DiffCollection
+from venaroq.domain.queue import JobLease
+from venaroq.errors import (
     LeaseLostError,
     PersistenceUnavailableError,
     ProviderCallTerminalError,
     ProviderWriteRejectedError,
 )
-from revio.registries import ProviderRegistry, SCMAdapterBundle
+from venaroq.registries import ProviderRegistry, SCMAdapterBundle
 
 
 @dataclass
@@ -144,7 +144,7 @@ class FailingReviewExecutor:
 async def test_lifecycle_change_after_enqueue_blocks_all_provider_reads(
     tmp_path: Path, action: str
 ) -> None:
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"))
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"))
     await store.initialize()
     await _job(store)
     await _lifecycle(store, "lifecycle", action, datetime.now(UTC))
@@ -160,7 +160,7 @@ async def test_lifecycle_change_after_enqueue_blocks_all_provider_reads(
 
 @pytest.mark.asyncio
 async def test_reactivation_allows_only_current_change_request_read(tmp_path: Path) -> None:
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"))
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"))
     await store.initialize()
     await _job(store)
     now = datetime.now(UTC)
@@ -186,7 +186,7 @@ async def test_graceful_shutdown_completes_or_leaves_lease_for_expiry(
         queue_heartbeat_seconds=4,
         queue_shutdown_timeout_seconds=0.05,
     )
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"), queue)
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"), queue)
     await store.initialize()
     await _job(store)
     reader = BlockingReader()
@@ -214,7 +214,7 @@ async def test_graceful_shutdown_completes_or_leaves_lease_for_expiry(
 async def test_lease_lost_before_provider_call_stops_processing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"))
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"))
     await store.initialize()
     await _job(store)
     lease = await store.lease_next("worker", datetime.now(UTC))
@@ -235,7 +235,7 @@ async def test_lease_lost_before_provider_call_stops_processing(
 async def test_transition_cas_false_is_lease_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transition: str
 ) -> None:
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"))
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"))
     await store.initialize()
     await _job(store)
     lease = await store.lease_next("worker", datetime.now(UTC))
@@ -274,7 +274,7 @@ async def test_heartbeat_loss_cancels_active_provider_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, persistence_failure: bool
 ) -> None:
     queue = QueueSettings(queue_lease_seconds=10, queue_heartbeat_seconds=1)
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"), queue)
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"), queue)
     await store.initialize()
     await _job(store)
     reader = BlockingReader()
@@ -325,7 +325,7 @@ async def test_provider_failure_and_current_head_classification(
     outcome: str,
     expected_state: str,
 ) -> None:
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"))
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"))
     await store.initialize()
     await _job(store)
     lease = await store.lease_next("worker", datetime.now(UTC))
@@ -353,7 +353,7 @@ async def test_provider_failure_and_current_head_classification(
 @pytest.mark.asyncio
 async def test_retry_exhaustion_uses_total_lease_count(tmp_path: Path) -> None:
     queue = QueueSettings(queue_max_attempts=1)
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"), queue)
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"), queue)
     await store.initialize()
     await _job(store)
     lease = await store.lease_next("worker", datetime.now(UTC))
@@ -376,7 +376,7 @@ async def test_retry_exhaustion_uses_total_lease_count(tmp_path: Path) -> None:
 async def test_expected_review_provider_failures_never_escape_worker_processing(
     tmp_path: Path, error: Exception
 ) -> None:
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"))
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"))
     await store.initialize()
     await _job(store)
     lease = await store.lease_next("worker", datetime.now(UTC))
@@ -402,7 +402,7 @@ async def test_expected_review_provider_failures_never_escape_worker_processing(
 async def test_worker_processes_valid_job_after_malformed_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "revio.db"))
+    store = SQLiteStore(DatabaseSettings(database_path=tmp_path / "venaroq.db"))
     await store.initialize()
     await _job(store)
     second = normalize_webhook(

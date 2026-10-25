@@ -2,11 +2,11 @@
 
 import pytest
 
-from revio.application.review.orchestrator import ReviewOrchestrator
-from revio.domain.capabilities import ResolvedModelProfile
-from revio.domain.identifiers import ChangeRequestTarget
-from revio.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewResult
 from tests.fakes import FakeAIReviewer, FakeSCMReader
+from venaroq.application.review.orchestrator import ReviewOrchestrator
+from venaroq.domain.capabilities import ResolvedModelProfile
+from venaroq.domain.identifiers import ChangeRequestTarget
+from venaroq.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewResult
 
 
 @pytest.mark.asyncio

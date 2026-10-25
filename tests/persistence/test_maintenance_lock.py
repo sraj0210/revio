@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from revio.adapters.persistence.sqlite.locks import MaintenanceLock, WorkerInstanceLock
-from revio.errors import PersistenceUnavailableError
+from venaroq.adapters.persistence.sqlite.locks import MaintenanceLock, WorkerInstanceLock
+from venaroq.errors import PersistenceUnavailableError
 
 
 def _hold_shared(path: str, connection: Connection) -> None:
@@ -18,8 +18,8 @@ def _hold_shared(path: str, connection: Connection) -> None:
 
 def _hold_worker(directory: str, connection: Connection) -> None:
     root = Path(directory)
-    with MaintenanceLock(root / "revio.maintenance.lock", exclusive=False):
-        with WorkerInstanceLock(root / "revio.worker.lock"):
+    with MaintenanceLock(root / "venaroq.maintenance.lock", exclusive=False):
+        with WorkerInstanceLock(root / "venaroq.worker.lock"):
             connection.send("ready")
             connection.recv()
 
@@ -28,7 +28,7 @@ def test_exclusive_maintenance_refuses_while_runtime_process_is_active(
     tmp_path: Path,
 ) -> None:
     parent, child = multiprocessing.Pipe()
-    lock_path = tmp_path / "revio.maintenance.lock"
+    lock_path = tmp_path / "venaroq.maintenance.lock"
     process = multiprocessing.Process(target=_hold_shared, args=(str(lock_path), child))
     process.start()
     assert parent.recv() == "ready"
@@ -47,24 +47,26 @@ def test_only_one_worker_process_and_process_death_releases_lock(tmp_path: Path)
     process.start()
     assert parent.recv() == "ready"
     with pytest.raises(PersistenceUnavailableError):
-        WorkerInstanceLock(tmp_path / "revio.worker.lock", timeout_seconds=0.05).acquire()
+        WorkerInstanceLock(tmp_path / "venaroq.worker.lock", timeout_seconds=0.05).acquire()
     with pytest.raises(PersistenceUnavailableError):
         MaintenanceLock(
-            tmp_path / "revio.maintenance.lock", exclusive=True, timeout_seconds=0.05
+            tmp_path / "venaroq.maintenance.lock", exclusive=True, timeout_seconds=0.05
         ).acquire()
     process.terminate()
     process.join(timeout=5)
     assert process.exitcode is not None
-    with WorkerInstanceLock(tmp_path / "revio.worker.lock", timeout_seconds=0.05):
+    with WorkerInstanceLock(tmp_path / "venaroq.worker.lock", timeout_seconds=0.05):
         pass
-    with MaintenanceLock(tmp_path / "revio.maintenance.lock", exclusive=True, timeout_seconds=0.05):
+    with MaintenanceLock(
+        tmp_path / "venaroq.maintenance.lock", exclusive=True, timeout_seconds=0.05
+    ):
         pass
 
 
 def test_lock_symlink_is_rejected(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.write_text("safe")
-    link = tmp_path / "revio.worker.lock"
+    link = tmp_path / "venaroq.worker.lock"
     link.symlink_to(target)
     with pytest.raises(PersistenceUnavailableError):
         WorkerInstanceLock(link, timeout_seconds=0.05).acquire()

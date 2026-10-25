@@ -5,7 +5,7 @@
 
 ## Context
 
-Revio needs installation-scoped, least-privilege GitHub reads without personal credentials.
+Venaroq needs installation-scoped, least-privilege GitHub reads without personal credentials.
 
 ## Decision
 

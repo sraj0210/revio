@@ -3,7 +3,7 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from revio.api.app import create_app
+from venaroq.api.app import create_app
 
 
 @pytest.mark.asyncio

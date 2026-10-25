@@ -60,7 +60,7 @@ Prefer a narrow `httpx` implementation over a GitHub SDK so GitHub DTOs, headers
 ## 4. Expected files
 
 ```text
-src/revio/
+src/venaroq/
 ├── cli/
 │   ├── __init__.py
 │   └── github_sandbox.py
@@ -109,7 +109,7 @@ docs/
 
 No database migrations or persistence adapters are included.
 
-Expose the CLI as a `pyproject.toml` script such as `revio-github-sandbox`. It calls the same read adapter as the application and does not call webhook code.
+Expose the CLI as a `pyproject.toml` script such as `venaroq-github-sandbox`. It calls the same read adapter as the application and does not call webhook code.
 
 ## 5. Provider-neutral events
 
@@ -161,8 +161,8 @@ Delivery identity represents physical redelivery. Semantic identity represents l
 
 Support exactly one administrator-controlled source:
 
-- `REVIO_GITHUB_PRIVATE_KEY`: PEM text
-- `REVIO_GITHUB_PRIVATE_KEY_FILE`: absolute secret-mount path
+- `VENAROQ_GITHUB_PRIVATE_KEY`: PEM text
+- `VENAROQ_GITHUB_PRIVATE_KEY_FILE`: absolute secret-mount path
 
 Rules:
 
@@ -226,19 +226,19 @@ Typed failures include private-key, JWT, installation-not-found, suspension, aut
 ## 7. Configuration
 
 ```text
-REVIO_ENVIRONMENT=local|sandbox|production
-REVIO_GITHUB_ENABLED=true
-REVIO_GITHUB_SANDBOX_WEBHOOK_ENABLED=false
-REVIO_GITHUB_APP_ID=<numeric id>
-REVIO_GITHUB_PRIVATE_KEY=<secret PEM>
-REVIO_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-app.pem
-REVIO_GITHUB_WEBHOOK_SECRET=<secret>
-REVIO_GITHUB_API_URL=https://api.github.com
-REVIO_GITHUB_API_VERSION=<administrator-pinned version>
-REVIO_GITHUB_HTTP_TIMEOUT_SECONDS=10
-REVIO_GITHUB_TOKEN_REFRESH_MARGIN_SECONDS=60
-REVIO_GITHUB_TOKEN_MINIMUM_USABLE_LIFETIME_SECONDS=30
-REVIO_GITHUB_WEBHOOK_MAX_BYTES=1048576
+VENAROQ_ENVIRONMENT=local|sandbox|production
+VENAROQ_GITHUB_ENABLED=true
+VENAROQ_GITHUB_SANDBOX_WEBHOOK_ENABLED=false
+VENAROQ_GITHUB_APP_ID=<numeric id>
+VENAROQ_GITHUB_PRIVATE_KEY=<secret PEM>
+VENAROQ_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-app.pem
+VENAROQ_GITHUB_WEBHOOK_SECRET=<secret>
+VENAROQ_GITHUB_API_URL=https://api.github.com
+VENAROQ_GITHUB_API_VERSION=<administrator-pinned version>
+VENAROQ_GITHUB_HTTP_TIMEOUT_SECONDS=10
+VENAROQ_GITHUB_TOKEN_REFRESH_MARGIN_SECONDS=60
+VENAROQ_GITHUB_TOKEN_MINIMUM_USABLE_LIFETIME_SECONDS=30
+VENAROQ_GITHUB_WEBHOOK_MAX_BYTES=1048576
 ```
 
 Rules:
@@ -246,8 +246,8 @@ Rules:
 - Repository content cannot set these values.
 - GitHub.com is the only Phase 2 API host.
 - Secret values use Pydantic secret types and redacted representations.
-- `REVIO_GITHUB_ENABLED` controls the read adapter and GitHub App authentication independently of webhook ingress.
-- `REVIO_GITHUB_SANDBOX_WEBHOOK_ENABLED` controls only the non-durable route.
+- `VENAROQ_GITHUB_ENABLED` controls the read adapter and GitHub App authentication independently of webhook ingress.
+- `VENAROQ_GITHUB_SANDBOX_WEBHOOK_ENABLED` controls only the non-durable route.
 - Startup must fail when the sandbox webhook is enabled in `production`.
 - Production may enable the read adapter while leaving the sandbox webhook disabled.
 - `.env.example` contains names and safe placeholders only.
@@ -387,7 +387,7 @@ Use one injected `httpx.AsyncClient` with:
 - Connect/read/write/pool timeouts
 - GitHub JSON Accept header
 - Pinned API-version header
-- Safe Revio user agent
+- Safe Venaroq user agent
 - Per-request installation authorization
 - No cross-host authorization redirects
 
@@ -516,7 +516,7 @@ Use `respx` for all normal CI HTTP tests. Live GitHub calls are opt-in only.
 5. Enable the GitHub read adapter and leave the sandbox webhook disabled.
 6. Run the validation CLI with installation ID, repository, and PR number.
 7. Confirm current PR metadata, base/head SHAs, bounded changed files, explicit-ref file metadata, and a bounded non-recursive tree without source contents.
-8. Enable the sandbox webhook separately and start Revio in local/sandbox environment.
+8. Enable the sandbox webhook separately and start Venaroq in local/sandbox environment.
 9. Send an exact signed synthetic fixture to `/webhooks/github`.
 10. Confirm processing and test signature rejection after changing one byte; responses must not contain normalized data.
 11. Confirm unsupported actions return generic accepted/ignored results.
@@ -579,7 +579,7 @@ Docker Compose remains development-only and gains no production profile.
 - Queue, worker, retries, or stale-job supersession
 - AI providers, prompts, or review generation
 - Publishing, comments, statuses, Check Runs, or threads
-- `.revio.yml` loading
+- `.venaroq.yml` loading
 - Diff hashes, fingerprints, or finding lifecycle
 - Reviewer-request triggers
 - GitLab, Bitbucket, or GitHub Enterprise Server
@@ -630,10 +630,10 @@ Docker Compose remains development-only and gains no production profile.
 
 Rollback:
 
-1. Set `REVIO_GITHUB_SANDBOX_WEBHOOK_ENABLED=false`; the route then returns `404` while the read adapter may remain enabled.
+1. Set `VENAROQ_GITHUB_SANDBOX_WEBHOOK_ENABLED=false`; the route then returns `404` while the read adapter may remain enabled.
 2. Rotate the webhook secret.
 3. Revoke the App private key if necessary.
-4. Disable `REVIO_GITHUB_ENABLED` if the read adapter must also be rolled back.
+4. Disable `VENAROQ_GITHUB_ENABLED` if the read adapter must also be rolled back.
 5. Suspend/uninstall the sandbox App, which also invalidates provider credentials; local cache is process-only.
 6. Stop/restart the process to clear all local token and lock state.
 7. Revert the Phase 2 PR.

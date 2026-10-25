@@ -4,35 +4,35 @@ from datetime import UTC, datetime
 
 import pytest
 
-from revio.adapters.ai.anthropic import anthropic_model_profile
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.review.lifecycle import FindingLifecycleService
-from revio.domain.configuration import EffectiveReviewPolicy
-from revio.domain.identifiers import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.ai.anthropic import anthropic_model_profile
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.application.review.lifecycle import FindingLifecycleService
+from venaroq.domain.configuration import EffectiveReviewPolicy
+from venaroq.domain.identifiers import (
     ChangeRequestTarget,
     InstallationRef,
     ProviderId,
     RepositoryRef,
 )
-from revio.domain.lifecycle import (
+from venaroq.domain.lifecycle import (
     FindingLifecycleState,
     FindingRecord,
     RevalidationCallState,
     RevalidationOutcome,
 )
-from revio.domain.models import ChangeRequest, DiffCollection, TokenUsage, TreeCollection
-from revio.domain.revalidation import (
+from venaroq.domain.models import ChangeRequest, DiffCollection, TokenUsage, TreeCollection
+from venaroq.domain.revalidation import (
     FindingRevalidationBatchResult,
     FindingRevalidationRequest,
     RevalidationResultItem,
 )
-from revio.errors import (
+from venaroq.errors import (
     IncompleteReviewInputError,
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
     ProviderCallSafeRetryError,
 )
-from tests.conftest import AlembicDatabase
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 DIGEST = "a" * 64
@@ -117,7 +117,7 @@ class _Revalidator:
         if len(request.items) > self.max_items:
             raise IncompleteReviewInputError("too large")
         return {
-            "_revio_estimated_input_tokens": 10,
+            "_venaroq_estimated_input_tokens": 10,
             "_ids": [item.finding_id for item in request.items],
         }
 

@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: YYYY-MM-DD
-- Decision owners: Revio maintainers
+- Decision owners: Venaroq maintainers
 
 ## Context
 

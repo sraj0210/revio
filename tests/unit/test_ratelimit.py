@@ -1,6 +1,6 @@
 """Fixed-window ingress rate limiter."""
 
-from revio.api.ratelimit import FixedWindowRateLimiter
+from venaroq.api.ratelimit import FixedWindowRateLimiter
 
 
 class _Clock:

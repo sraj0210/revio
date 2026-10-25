@@ -87,7 +87,7 @@ to the diff, so injected text in a fetched file cannot manufacture a finding.
 Proposed: agent mode runs only when **all** hold — the resolved model profile allows the `agent`
 review mode and declares tool use (a new `AIProviderCapabilities.tool_use`, plus the existing
 `native_tools`), the SCM bundle advertises `repository_file_access` and `tree_access`, and an
-administrator switch (`REVIO_REVIEW_AGENT_MODE_ENABLED`, default false) is on. If any is missing, the
+administrator switch (`VENAROQ_REVIEW_AGENT_MODE_ENABLED`, default false) is on. If any is missing, the
 review silently runs diff-only. Default shipped profiles stay diff-only; agent mode is opt-in via a
 distinct agent-capable model alias.
 
@@ -108,15 +108,15 @@ execution itself is freely retryable within limits.
 ## 4. Scope and files
 
 New (indicative):
-- `src/revio/application/review/agent.py` — `AgentReviewService` (loop, limits, provenance, partial).
-- `src/revio/application/review/agent_tools.py` — neutral tool definitions + core-side executor with
+- `src/venaroq/application/review/agent.py` — `AgentReviewService` (loop, limits, provenance, partial).
+- `src/venaroq/application/review/agent_tools.py` — neutral tool definitions + core-side executor with
   the path/secret/limit guards over `RepositoryContentReadPort`.
-- `src/revio/domain/agent.py` — neutral tool-request/result and provenance value objects.
-- Port change in `src/revio/ports/ai.py` — an agent-turn primitive on the review generator.
+- `src/venaroq/domain/agent.py` — neutral tool-request/result and provenance value objects.
+- Port change in `src/venaroq/ports/ai.py` — an agent-turn primitive on the review generator.
 - Adapter turn implementations for Anthropic and OpenAI (tool-call wire formats) reusing the shared
   review schema for the final structured output.
 - `AIProviderCapabilities.tool_use`; agent-capable model profiles/aliases.
-- Config: `REVIO_REVIEW_AGENT_MODE_ENABLED` and the agent limits.
+- Config: `VENAROQ_REVIEW_AGENT_MODE_ENABLED` and the agent limits.
 - `docs/adr/0012-agent-mode.md`; a sandbox-validation runbook.
 
 Explicitly **not** modified: the SCM write/publish path, persistence schema beyond additive

@@ -1,4 +1,4 @@
-# Revio Architecture and Implementation Plan
+# Venaroq Architecture and Implementation Plan
 
 Status: Proposed
 Scope: Planning only
@@ -6,7 +6,7 @@ Reference implementation: GitHub App + Anthropic + diff-only reviews
 
 ## 1. Executive summary
 
-Revio will be a provider-neutral AI code-review service. Its first production path is:
+Venaroq will be a provider-neutral AI code-review service. Its first production path is:
 
 ```text
 GitHub App -> verified webhook -> durable SQLite job -> async worker
@@ -28,7 +28,7 @@ The smallest useful production MVP comprises Phases 0 through 7. Phase 4 is the 
 - Diff-only structured reviews
 - Inline comments, summary comments, confidence routing, and review status
 - SQLite WAL durable queue, retry, recovery, and idempotency
-- Per-repository `.revio.yml`
+- Per-repository `.venaroq.yml`
 - Duplicate prevention and unchanged-diff skipping
 - JSON logs, Prometheus metrics, health, and readiness
 - Single-node Docker Compose deployment
@@ -43,7 +43,7 @@ The smallest useful production MVP comprises Phases 0 through 7. Phase 4 is the 
 
 ### Explicitly prohibited initially
 
-Revio will not approve or merge changes, push commits, modify repository settings, trigger deployments, create releases, execute repository code, accept repository credentials, or persist complete source files and diffs by default.
+Venaroq will not approve or merge changes, push commits, modify repository settings, trigger deployments, create releases, execute repository code, accept repository credentials, or persist complete source files and diffs by default.
 
 ## 3. High-level architecture
 
@@ -116,7 +116,7 @@ sequenceDiagram
         Core->>DB: Supersede/cancel stale job
         Core-->>Worker: Superseded; do not review or publish
     end
-    Core->>SCM: Get diff at current head and .revio.yml at current base
+    Core->>SCM: Get diff at current head and .venaroq.yml at current base
     SCM-->>Core: Normalized metadata and DiffFiles
     Core->>Core: Validate/merge base config or use defaults + warning
     Core->>SCM: Create/reconcile one queued Check Run
@@ -203,7 +203,7 @@ class ThreadReplyPort(Protocol):
 Publishing uses an explicit reconciliation protocol:
 
 1. Reserve a unique, stable operation key in persistence before the provider call.
-2. Embed a stable hidden Revio marker derived from that key in the GitHub review body, for example an HTML comment containing no sensitive data.
+2. Embed a stable hidden Venaroq marker derived from that key in the GitHub review body, for example an HTML comment containing no sensitive data.
 3. Publish the review.
 4. If the call times out or has an ambiguous outcome, query existing pull-request reviews for that marker before retrying.
 5. On a match or successful creation, record the provider review ID against the reserved operation before marking it complete.
@@ -261,7 +261,7 @@ Use two identities:
 - Delivery identity: provider plus webhook UUID, preventing redelivery replay.
 - Semantic identity: target plus trigger-specific material. Commit reviews use head SHA; genuine re-requests include reviewer/team and occurrence; developer replies use provider note IDs.
 
-An unchanged-diff policy is separate from ingress idempotency. At worker processing time, always fetch the current `ChangeRequest`. The current head SHA governs diff retrieval, review generation, anchor validation, publishing, and finding revalidation; the current base SHA governs trusted `.revio.yml` loading. If the event head SHA no longer matches the current head, supersede or cancel the stale job rather than reviewing or posting against obsolete state. A current-head event already represented by another semantic job is deduplicated. Delayed and out-of-order delivery behavior is tested explicitly.
+An unchanged-diff policy is separate from ingress idempotency. At worker processing time, always fetch the current `ChangeRequest`. The current head SHA governs diff retrieval, review generation, anchor validation, publishing, and finding revalidation; the current base SHA governs trusted `.venaroq.yml` loading. If the event head SHA no longer matches the current head, supersede or cancel the stale job rather than reviewing or posting against obsolete state. A current-head event already represented by another semantic job is deduplicated. Delayed and out-of-order delivery behavior is tested explicitly.
 
 ## 10. GitHub App authentication
 
@@ -283,7 +283,7 @@ GitHub Check Run conclusions are informational in the initial product:
 - neutral: partial review or intentional skip
 - failure: operational failure to perform the review
 
-Findings do not produce a failure conclusion and are not merge-blocking. Repository administrators may choose branch rules independently, but Revio's initial status semantics do not treat findings as a failed check.
+Findings do not produce a failure conclusion and are not merge-blocking. Repository administrators may choose branch rules independently, but Venaroq's initial status semantics do not treat findings as a failed check.
 
 Create or discover exactly one GitHub Check Run for a review run, persist its provider Check Run ID, and update that same Check Run through queued, in-progress, and terminal states. Ambiguous creation is reconciled using its stable external identity before retry; state transitions must not create a separate Check Run.
 
@@ -291,7 +291,7 @@ Create or discover exactly one GitHub Check Run for a review run, persist its pr
 
 Service configuration uses Pydantic Settings sections for server, database, queue, SCM and AI providers, review defaults, security, observability, and rollout. YAML contains environment-variable references or secret-file references, never literal secrets.
 
-Repository configuration is strict and versioned. For every review, load `.revio.yml` from the trusted pull-request **base commit SHA**, never the unmerged head. A configuration change proposed by a pull request becomes active only after it is merged and becomes part of the base of a later review:
+Repository configuration is strict and versioned. For every review, load `.venaroq.yml` from the trusted pull-request **base commit SHA**, never the unmerged head. A configuration change proposed by a pull request becomes active only after it is merged and becomes part of the base of a later review:
 
 ```yaml
 version: 1
@@ -313,7 +313,7 @@ hard security ceilings
 -> validated repository configuration
 ```
 
-Repository configuration may narrow behavior but cannot supply secrets, enable disabled providers, raise security ceilings, choose arbitrary endpoints/models, disable mandatory policy, remove protected exclusions, or override administrator rollout and security controls. `enabled: false` is honored only when administrator policy explicitly permits repository-level opt-out. Mandatory installation or future organization policy always wins and cannot be disabled by repository configuration. Missing configuration uses secure service defaults. Invalid, oversized, or malicious configuration must not skip the review: Revio falls back to secure service defaults and includes a visible configuration warning in the published review/status. Config parsing failures are logged and measured without reproducing unsafe content.
+Repository configuration may narrow behavior but cannot supply secrets, enable disabled providers, raise security ceilings, choose arbitrary endpoints/models, disable mandatory policy, remove protected exclusions, or override administrator rollout and security controls. `enabled: false` is honored only when administrator policy explicitly permits repository-level opt-out. Mandatory installation or future organization policy always wins and cannot be disabled by repository configuration. Missing configuration uses secure service defaults. Invalid, oversized, or malicious configuration must not skip the review: Venaroq falls back to secure service defaults and includes a visible configuration warning in the published review/status. Config parsing failures are logged and measured without reproducing unsafe content.
 
 ## 12. Queue and persistence
 
@@ -386,8 +386,8 @@ Emit AI metrics once per provider call and aggregate review metrics once per rev
 ## 16. Repository structure
 
 ```text
-revio/
-├── src/revio/
+venaroq/
+├── src/venaroq/
 │   ├── api/
 │   ├── domain/
 │   ├── application/{review,webhook,services}/
@@ -403,7 +403,7 @@ revio/
 ├── docs/{architecture,adr,providers,runbooks}/
 ├── deploy/
 ├── .github/workflows/
-├── .revio.yml.example
+├── .venaroq.yml.example
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
@@ -415,7 +415,7 @@ revio/
 └── LICENSE
 ```
 
-Keep repository and package names as `revio`. Recommended tools are Python 3.12, uv, Ruff, Pyright, pytest, pytest-asyncio, respx, coverage, pre-commit, GitHub Actions, Dependabot, CodeQL, and secret scanning. Apache-2.0 is the recommended license, subject to approval.
+Keep repository and package names as `venaroq`. Recommended tools are Python 3.12, uv, Ruff, Pyright, pytest, pytest-asyncio, respx, coverage, pre-commit, GitHub Actions, Dependabot, CodeQL, and secret scanning. Apache-2.0 is the recommended license, subject to approval.
 
 ## 17. Testing and provider contracts
 
@@ -484,7 +484,7 @@ Each phase uses a feature branch and pull request, includes tests, and requires 
 ### Phase 5 — Repository configuration and rollout basics
 
 - **Goal:** Safely tailor repository behavior.
-- **Scope/files:** Strict `.revio.yml` v1 loaded from the current base commit, loader/merger, secure fallback/warnings, protected exclusions, focus areas, thresholds, enabled flag, rollout allow-list.
+- **Scope/files:** Strict `.venaroq.yml` v1 loaded from the current base commit, loader/merger, secure fallback/warnings, protected exclusions, focus areas, thresholds, enabled flag, rollout allow-list.
 - **Delivered behavior:** Valid trusted-base preferences affect reviews within mandatory service policy. `enabled: false` opts out only if administrator policy allows it. Invalid/malicious config falls back to secure defaults and produces a visible warning without skipping review. A PR config edit activates only after merge.
 - **Tests:** Base-versus-head config, config activation after merge, permitted/prohibited opt-out, mandatory installation/organization policy, missing/valid/invalid/oversized/malicious config, warning publication, protected controls, precedence, globs, base-SHA caching.
 - **Manual validation:** Propose a config change and prove it is inactive on that PR, active in a later PR after merge, and unable to suppress review when invalid.

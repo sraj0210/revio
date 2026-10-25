@@ -5,15 +5,16 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.ai.anthropic import anthropic_model_profile
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
-from revio.application.review.execution import ReviewGenerationService
-from revio.application.review.job import ReviewJobExecutor, stable_id
-from revio.application.review.lifecycle import FindingLifecycleService
-from revio.config.review import ReviewSettings
-from revio.domain.identifiers import ChangeRequestTarget
-from revio.domain.lifecycle import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.ai.anthropic import anthropic_model_profile
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.adapters.scm.github.webhook.normalizer import normalize_webhook
+from venaroq.application.review.execution import ReviewGenerationService
+from venaroq.application.review.job import ReviewJobExecutor, stable_id
+from venaroq.application.review.lifecycle import FindingLifecycleService
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.identifiers import ChangeRequestTarget
+from venaroq.domain.lifecycle import (
     FindingLifecycleState,
     OccurrenceDisposition,
     RevalidationOutcome,
@@ -21,7 +22,7 @@ from revio.domain.lifecycle import (
     ThreadLinkState,
     ThreadReadResult,
 )
-from revio.domain.models import (
+from venaroq.domain.models import (
     ChangeRequest,
     DiffCollection,
     DiffFile,
@@ -33,13 +34,12 @@ from revio.domain.models import (
     TokenUsage,
     TreeCollection,
 )
-from revio.domain.revalidation import (
+from venaroq.domain.revalidation import (
     FindingRevalidationBatchResult,
     FindingRevalidationRequest,
     RevalidationResultItem,
 )
-from revio.domain.reviews import ReconciliationResult, ReviewStatusDetails
-from tests.conftest import AlembicDatabase
+from venaroq.domain.reviews import ReconciliationResult, ReviewStatusDetails
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 EVIDENCE = "ok = dangerous(name)"
@@ -101,7 +101,7 @@ class _Reader:
 
     async def get_file(self, target: ChangeRequestTarget, path: str, ref: str) -> str | None:
         # A distinctive token proves whole-file content is never persisted anywhere.
-        return f"def handler():  # REVIO_PRIVACY_FILE_BODY_TOKEN\n    {EVIDENCE}\n"
+        return f"def handler():  # VENAROQ_PRIVACY_FILE_BODY_TOKEN\n    {EVIDENCE}\n"
 
     async def get_tree(self, target: ChangeRequestTarget, path: str, ref: str) -> TreeCollection:
         raise NotImplementedError
@@ -116,7 +116,7 @@ class _Revalidator:
         self, request: FindingRevalidationRequest
     ) -> dict[str, object]:
         return {
-            "_revio_estimated_input_tokens": 10,
+            "_venaroq_estimated_input_tokens": 10,
             "_ids": [item.finding_id for item in request.items],
         }
 
@@ -188,7 +188,7 @@ class _Writer:
         *,
         head_sha: str,
         external_id: str,
-        name: str = "Revio review",
+        name: str = "Venaroq review",
     ) -> ReconciliationResult:
         ids = (self.check_id,) if self.check_id else ()
         return ReconciliationResult(
@@ -344,7 +344,7 @@ async def test_new_finding_published_with_marker_and_linked(
     assert writer.publish_calls == 1
     # The inline comment carried a hidden per-finding marker.
     assert writer.published_markers[0] and writer.published_markers[0][0].startswith(
-        "<!-- revio:v1:finding:"
+        "<!-- venaroq:v1:finding:"
     )
     run_id = stable_id("review-run", lease.job.id)
     occurrences = await store.findings.occurrences_for_run(run_id)
@@ -527,6 +527,6 @@ async def test_no_whole_file_content_is_persisted(alembic_database: AlembicDatab
             rows = await connection.execute_fetchall(f"SELECT * FROM {table}")
             for row in rows:
                 haystack += "\x1f".join("" if value is None else str(value) for value in row)
-    assert "REVIO_PRIVACY_FILE_BODY_TOKEN" not in haystack
+    assert "VENAROQ_PRIVACY_FILE_BODY_TOKEN" not in haystack
     # The bounded, validated evidence snippet is a permitted lifecycle value and is present.
     assert EVIDENCE in haystack

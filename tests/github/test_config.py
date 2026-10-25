@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from revio.config.github import GitHubSettings
+from venaroq.config.github import GitHubSettings
 
 
 def test_disabled_github_requires_no_credentials() -> None:

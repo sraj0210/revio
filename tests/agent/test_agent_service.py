@@ -2,10 +2,10 @@
 
 import pytest
 
-from revio.application.review.agent import AgentReviewService
-from revio.application.review.agent_tools import AgentLimits
-from revio.domain.agent import AgentToolRequest, AgentTurnResult
-from revio.domain.models import (
+from venaroq.application.review.agent import AgentReviewService
+from venaroq.application.review.agent_tools import AgentLimits
+from venaroq.domain.agent import AgentToolRequest, AgentTurnResult
+from venaroq.domain.models import (
     ChangeRequest,
     ChangeRequestTarget,
     Finding,
@@ -15,7 +15,7 @@ from revio.domain.models import (
     TokenUsage,
     TreeCollection,
 )
-from revio.errors import (
+from venaroq.errors import (
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
     ProviderCallObservedTerminalError,
@@ -42,7 +42,7 @@ class FakeAgentAdapter:
         self.appended: list[tuple[object, ...]] = []
 
     async def agent_preflight(self, request: ReviewRequest) -> dict[str, object]:
-        return {"messages": [], "_revio_estimated_input_tokens": 1}
+        return {"messages": [], "_venaroq_estimated_input_tokens": 1}
 
     async def agent_turn(self, payload: dict[str, object]) -> AgentTurnResult:
         item = self.turns[self.index]
@@ -59,7 +59,7 @@ class FakeAgentAdapter:
 
 
 def _request(change_request: ChangeRequest) -> ReviewRequest:
-    from revio.adapters.ai.anthropic import anthropic_agent_model_profile
+    from venaroq.adapters.ai.anthropic import anthropic_agent_model_profile
 
     return ReviewRequest(
         change_request=change_request, diff_files=(), model_profile=anthropic_agent_model_profile()

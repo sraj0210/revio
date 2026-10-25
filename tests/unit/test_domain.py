@@ -3,8 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from revio.domain.capabilities import ResolvedModelProfile
-from revio.domain.identifiers import ModelAlias, ProviderId
+from venaroq.domain.capabilities import ResolvedModelProfile
+from venaroq.domain.identifiers import ModelAlias, ProviderId
 
 
 def test_provider_id_is_extensible_and_validated() -> None:

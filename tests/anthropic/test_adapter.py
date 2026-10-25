@@ -7,11 +7,11 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.ai.anthropic import AnthropicReviewAdapter, anthropic_model_profile
-from revio.config.anthropic import AnthropicSettings
-from revio.config.review import ReviewSettings
-from revio.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewRequest
-from revio.errors import (
+from venaroq.adapters.ai.anthropic import AnthropicReviewAdapter, anthropic_model_profile
+from venaroq.config.anthropic import AnthropicSettings
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewRequest
+from venaroq.errors import (
     ProviderCallAmbiguousError,
     ProviderCallObservedInvalidResponseError,
     ProviderCallObservedTerminalError,

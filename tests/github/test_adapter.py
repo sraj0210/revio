@@ -6,16 +6,21 @@ from typing import Any, Literal, cast
 import httpx
 import pytest
 
-from revio.adapters.scm.github.adapter import GitHubReadAdapter
-from revio.adapters.scm.github.client import GitHubClient
-from revio.adapters.scm.github.errors import (
+from venaroq.adapters.scm.github.adapter import GitHubReadAdapter
+from venaroq.adapters.scm.github.client import GitHubClient
+from venaroq.adapters.scm.github.errors import (
     GitHubAmbiguousNotFoundError,
     GitHubInvalidRefError,
     GitHubNotFoundError,
     GitHubResponseError,
     GitHubUnsupportedObjectError,
 )
-from revio.domain.identifiers import ChangeRequestTarget, InstallationRef, ProviderId, RepositoryRef
+from venaroq.domain.identifiers import (
+    ChangeRequestTarget,
+    InstallationRef,
+    ProviderId,
+    RepositoryRef,
+)
 
 
 class FakeClient:
@@ -161,7 +166,7 @@ def test_diff_status_path_and_patch_semantics(
     new_path: str | None,
     patch_state: str,
 ) -> None:
-    from revio.adapters.scm.github.dto.api import GitHubFileDTO
+    from venaroq.adapters.scm.github.dto.api import GitHubFileDTO
 
     mapped = GitHubReadAdapter._map_file(  # pyright: ignore[reportPrivateUsage]
         GitHubFileDTO.model_validate(payload)
@@ -175,7 +180,7 @@ def test_diff_status_path_and_patch_semantics(
 
 
 def test_malformed_patch_is_explicit() -> None:
-    from revio.adapters.scm.github.dto.api import GitHubFileDTO
+    from venaroq.adapters.scm.github.dto.api import GitHubFileDTO
 
     mapped = GitHubReadAdapter._map_file(  # pyright: ignore[reportPrivateUsage]
         GitHubFileDTO(filename="a", status="modified", patch="not-a-hunk")
@@ -185,7 +190,7 @@ def test_malformed_patch_is_explicit() -> None:
 
 
 def test_valid_patch_is_complete_and_preserves_change_counts() -> None:
-    from revio.adapters.scm.github.dto.api import GitHubFileDTO
+    from venaroq.adapters.scm.github.dto.api import GitHubFileDTO
 
     mapped = GitHubReadAdapter._map_file(  # pyright: ignore[reportPrivateUsage]
         GitHubFileDTO(
@@ -205,7 +210,7 @@ def test_valid_patch_is_complete_and_preserves_change_counts() -> None:
 def test_renamed_and_copied_identity_includes_previous_filename(
     status: Literal["renamed", "copied"],
 ) -> None:
-    from revio.adapters.scm.github.dto.api import GitHubFileDTO
+    from venaroq.adapters.scm.github.dto.api import GitHubFileDTO
 
     first = GitHubFileDTO(filename="new", previous_filename="old-a", status=status)
     second = GitHubFileDTO(filename="new", previous_filename="old-b", status=status)
@@ -217,7 +222,7 @@ def test_renamed_and_copied_identity_includes_previous_filename(
 
 
 def test_provider_truncated_patch_state_requires_explicit_authoritative_evidence() -> None:
-    from revio.domain.models import DiffFile
+    from venaroq.domain.models import DiffFile
 
     # The current GitHub files payload has no authoritative per-patch truncation field.
     explicit = DiffFile(

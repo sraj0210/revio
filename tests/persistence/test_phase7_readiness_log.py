@@ -2,8 +2,8 @@
 
 import pytest
 
-from revio.adapters.observability import InMemoryQueueMetrics
 from tests.conftest import AlembicDatabase
+from venaroq.adapters.observability import InMemoryQueueMetrics
 
 
 @pytest.mark.asyncio

@@ -4,9 +4,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.retention import retain_closed_findings
-from revio.domain.lifecycle import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.application.retention import retain_closed_findings
+from venaroq.domain.lifecycle import (
     FindingLifecycleState,
     FindingOccurrence,
     FindingRecord,
@@ -15,7 +16,6 @@ from revio.domain.lifecycle import (
     ThreadLinkState,
     ThreadResolutionState,
 )
-from tests.conftest import AlembicDatabase
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 OLD = NOW - timedelta(days=200)

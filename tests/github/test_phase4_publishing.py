@@ -5,9 +5,9 @@ from typing import cast
 import httpx
 import pytest
 
-from revio.adapters.scm.github.client import GitHubClient
-from revio.adapters.scm.github.publishing import GitHubReviewWriter
-from revio.domain.identifiers import (
+from venaroq.adapters.scm.github.client import GitHubClient
+from venaroq.adapters.scm.github.publishing import GitHubReviewWriter
+from venaroq.domain.identifiers import (
     ChangeRequestTarget,
     InstallationRef,
     ProviderId,
@@ -78,7 +78,7 @@ async def test_complete_zero_and_last_page_exact_check_match(
                     "check_runs": [
                         {
                             "id": 9,
-                            "name": "Revio review",
+                            "name": "Venaroq review",
                             "external_id": "external",
                             "head_sha": "head",
                             "app": {"id": 7},
@@ -119,7 +119,7 @@ async def test_review_post_pins_comment_event_commit_and_right_anchor(
 ) -> None:
     fake = FakeClient([response({"id": 11})])
     writer = GitHubReviewWriter(cast(GitHubClient, fake), 7)
-    from revio.domain.models import Finding
+    from venaroq.domain.models import Finding
 
     identifier = await writer.publish_review(
         github_target,
@@ -134,7 +134,7 @@ async def test_review_post_pins_comment_event_commit_and_right_anchor(
                 line=4,
             ),
         ),
-        marker="<!-- revio:v1:review:abcdefghijklmnopqrstuvwx -->",
+        marker="<!-- venaroq:v1:review:abcdefghijklmnopqrstuvwx -->",
         commit_id="validated-head",
     )
     assert identifier == "11"
@@ -172,7 +172,7 @@ async def test_check_suite_multiple_matches_are_fully_enumerated(
                     "check_runs": [
                         {
                             "id": value,
-                            "name": "Revio review",
+                            "name": "Venaroq review",
                             "external_id": "external",
                             "head_sha": "head",
                             "app": {"id": 7},

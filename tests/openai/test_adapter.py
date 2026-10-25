@@ -7,11 +7,11 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.ai.openai import OpenAIReviewAdapter, openai_model_profile
-from revio.config.openai import OpenAISettings
-from revio.config.review import ReviewSettings
-from revio.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewRequest
-from revio.errors import (
+from venaroq.adapters.ai.openai import OpenAIReviewAdapter, openai_model_profile
+from venaroq.config.openai import OpenAISettings
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewRequest
+from venaroq.errors import (
     IncompleteReviewInputError,
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,

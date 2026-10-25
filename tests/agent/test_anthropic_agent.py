@@ -6,11 +6,11 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.ai.anthropic import AnthropicReviewAdapter
-from revio.config.anthropic import AnthropicSettings
-from revio.config.review import ReviewSettings
-from revio.domain.agent import AgentToolResult
-from revio.errors import ProviderCallObservedTerminalError
+from venaroq.adapters.ai.anthropic import AnthropicReviewAdapter
+from venaroq.config.anthropic import AnthropicSettings
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.agent import AgentToolResult
+from venaroq.errors import ProviderCallObservedTerminalError
 
 
 def _adapter(handler: object) -> AnthropicReviewAdapter:

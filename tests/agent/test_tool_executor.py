@@ -9,9 +9,9 @@ import json
 
 import pytest
 
-from revio.application.review.agent_tools import AgentLimits, AgentToolExecutor
-from revio.domain.agent import AgentToolRequest
-from revio.domain.models import (
+from venaroq.application.review.agent_tools import AgentLimits, AgentToolExecutor
+from venaroq.domain.agent import AgentToolRequest
+from venaroq.domain.models import (
     ChangeRequestTarget,
     CollectionCompleteness,
     RepositoryEntry,

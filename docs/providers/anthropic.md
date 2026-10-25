@@ -6,9 +6,9 @@ alias `review-default`, pinned to `claude-sonnet-5`. The request sends
 `output_config.format` JSON schema. Prompt caching marks only trusted versioned system instructions;
 pull-request content is never intentionally cached.
 
-Configure exactly one of `REVIO_ANTHROPIC_API_KEY` or an absolute
-`REVIO_ANTHROPIC_API_KEY_FILE`. Review execution is separately gated by
-`REVIO_REVIEW_ENABLED`. Exact normalized usage comes only from observed Messages responses; an
+Configure exactly one of `VENAROQ_ANTHROPIC_API_KEY` or an absolute
+`VENAROQ_ANTHROPIC_API_KEY_FILE`. Review execution is separately gated by
+`VENAROQ_REVIEW_ENABLED`. Exact normalized usage comes only from observed Messages responses; an
 ambiguous attempt records unknown usage and is never retransmitted.
 
 Token-count failures occur before Messages and are classified as safe preflight retry or terminal
@@ -21,7 +21,7 @@ Only the durable `retryable_rejected` state authorizes the next ordinal. Termina
 `terminal_rejected`; an observed 2xx response whose usage cannot be trusted uses
 `response_observed` with unknown usage. Neither state is retransmitted.
 
-A trustworthy HTTP 200 refusal or `max_tokens` response is not `known_rejected`: Revio durably
+A trustworthy HTTP 200 refusal or `max_tokens` response is not `known_rejected`: Venaroq durably
 records `response_observed` with exact usage, persists a service-owned partial artifact, and then
 completes that same ProviderCall. Its preflight token estimate is stored separately on the immutable
 ProviderCall identity as admission metadata; it is never counted as billed usage.

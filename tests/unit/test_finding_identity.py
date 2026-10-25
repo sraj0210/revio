@@ -2,7 +2,7 @@
 
 import pytest
 
-from revio.domain.finding_identity import (
+from venaroq.domain.finding_identity import (
     PRIMARY_VERSION,
     SECONDARY_VERSION,
     evidence_occurs_in_diff,
@@ -17,7 +17,7 @@ from revio.domain.finding_identity import (
     primary_fingerprint_v1,
     secondary_fingerprint_v1,
 )
-from revio.domain.models import DiffFile, DiffLine, FindingIdentity
+from venaroq.domain.models import DiffFile, DiffLine, FindingIdentity
 
 PRIMARY_ARGS = {
     "provider_id": "github",
@@ -39,7 +39,7 @@ SECONDARY_ARGS = {
 
 GOLDEN_PRIMARY = "58e9d219046d059613736257c4263d9b2af7862eee4c039c8362aa7b8dac2a45"
 GOLDEN_SECONDARY = "41c8d98b1913648e64826c97f503468f8d58089fca30fa6508a8832207be0384"
-GOLDEN_RECORD_ID = "7e13abff-21bc-5995-b1c3-e00913ba0611"
+GOLDEN_RECORD_ID = "82673790-de26-50c9-b146-55ec63276bbb"
 
 
 def test_primary_golden_vector() -> None:

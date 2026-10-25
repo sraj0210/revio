@@ -5,14 +5,15 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.ai.anthropic import anthropic_model_profile
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
-from revio.application.review.execution import ReviewGenerationService
-from revio.application.review.job import ReviewJobExecutor, stable_id
-from revio.config.review import ReviewSettings
-from revio.domain.identifiers import ChangeRequestTarget
-from revio.domain.models import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.ai.anthropic import anthropic_model_profile
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.adapters.scm.github.webhook.normalizer import normalize_webhook
+from venaroq.application.review.execution import ReviewGenerationService
+from venaroq.application.review.job import ReviewJobExecutor, stable_id
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.identifiers import ChangeRequestTarget
+from venaroq.domain.models import (
     ChangeRequest,
     DiffCollection,
     DiffFile,
@@ -21,13 +22,12 @@ from revio.domain.models import (
     ReviewRequest,
     ReviewResult,
 )
-from revio.domain.reviews import ReconciliationResult, ReviewRunState, ReviewStatusDetails
-from revio.errors import (
+from venaroq.domain.reviews import ReconciliationResult, ReviewRunState, ReviewStatusDetails
+from venaroq.errors import (
     ProviderAnchorRejectedError,
     ProviderWriteAmbiguousError,
     ProviderWriteRejectedError,
 )
-from tests.conftest import AlembicDatabase
 
 
 class SuccessfulReviewer:
@@ -122,7 +122,7 @@ class RecordingWriter:
         *,
         head_sha: str,
         external_id: str,
-        name: str = "Revio review",
+        name: str = "Venaroq review",
     ) -> ReconciliationResult:
         ids = (self.check_id,) if self.check_id else ()
         return ReconciliationResult(

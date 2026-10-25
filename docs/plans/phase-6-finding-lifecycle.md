@@ -32,7 +32,7 @@ selection; latest-head file retrieval; three-state revalidation; and ambiguity-s
    oversized, truncated, renamed-without-proof, or ambiguous findings remain open.
 6. Exact primary-fingerprint matches are duplicates and are not reposted. Secondary fingerprints never
    suppress or resolve by themselves; they may only rank candidates for bounded revalidation.
-7. When a completed review has no new publishable findings after exact deduplication, Revio completes
+7. When a completed review has no new publishable findings after exact deduplication, Venaroq completes
    the existing Check Run successfully with a deterministic service-owned summary and does not create a
    pull-request review.
 8. An unchanged normalized diff hash may skip new generation only when the same repository, pull

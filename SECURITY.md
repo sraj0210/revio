@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Revio is pre-release software. Security fixes are applied to the latest revision of the default branch until a versioned release policy is published.
+Venaroq is pre-release software. Security fixes are applied to the latest revision of the default branch until a versioned release policy is published.
 
 ## Reporting a vulnerability
 

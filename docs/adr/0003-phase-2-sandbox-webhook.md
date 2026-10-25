@@ -5,7 +5,7 @@
 
 ## Decision
 
-The signed GitHub webhook route is independently controlled by `REVIO_GITHUB_SANDBOX_WEBHOOK_ENABLED`. It returns 404 when disabled and startup fails if enabled in production. Responses expose only generic accepted/ignored status.
+The signed GitHub webhook route is independently controlled by `VENAROQ_GITHUB_SANDBOX_WEBHOOK_ENABLED`. It returns 404 when disabled and startup fails if enabled in production. Responses expose only generic accepted/ignored status.
 
 ## Consequences
 
