@@ -138,6 +138,41 @@ class ReviewRequest(BaseModel):
     focus_areas: tuple[str, ...] = ()
 
 
+AgentToolName = Literal["get_file", "get_tree"]
+
+
+class ConsultedFile(BaseModel):
+    """One repository object consulted during agent-mode review, for verification provenance."""
+
+    model_config = ConfigDict(frozen=True)
+    path: str = Field(min_length=1, max_length=1000)
+    ref: str = Field(min_length=1, max_length=128)
+    kind: AgentToolName
+
+
+class AgentProvenance(BaseModel):
+    """What agent-mode review consulted, and whether exploration was complete.
+
+    ``complete=False`` means a limit was reached or a request was refused, so the context the model
+    saw is partial. Contains only paths and commit SHAs — never any fetched content.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    consulted: tuple[ConsultedFile, ...] = ()
+    complete: bool = True
+
+    def note(self) -> str:
+        """A compact, human-readable provenance line for the published review."""
+        if not self.consulted:
+            return ""
+        refs = {item.ref for item in self.consulted}
+        ref = next(iter(refs)) if len(refs) == 1 else "the pull request"
+        suffix = "" if self.complete else " (context was limited)"
+        count = len(self.consulted)
+        plural = "file" if count == 1 else "files"
+        return f"Verified against {count} repository {plural} at {ref}{suffix}."
+
+
 class ReviewResult(BaseModel):
     model_config = ConfigDict(frozen=True)
     findings: tuple[Finding, ...] = ()
@@ -145,3 +180,4 @@ class ReviewResult(BaseModel):
     partial: bool = False
     fallback_mode: bool = False
     usage: TokenUsage = TokenUsage()
+    provenance: AgentProvenance | None = None

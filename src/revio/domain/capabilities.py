@@ -30,6 +30,7 @@ class AIProviderCapabilities(BaseModel):
     streaming_transport: bool = False
     image_transport: bool = False
     retryable_error_classification: bool = False
+    tool_use: bool = False
 
 
 class ResolvedModelProfile(BaseModel):

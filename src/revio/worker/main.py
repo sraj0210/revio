@@ -10,6 +10,7 @@ from typing import cast
 from revio.adapters.ai.anthropic import (
     ANTHROPIC_PROVIDER_ID,
     AnthropicReviewAdapter,
+    anthropic_agent_model_profile,
     anthropic_model_profile,
 )
 from revio.adapters.ai.openai import OPENAI_PROVIDER_ID, OpenAIReviewAdapter, openai_model_profile
@@ -24,7 +25,9 @@ from revio.adapters.scm.github.credentials import GitHubCredentialCache
 from revio.application.queue.processor import QueueProcessor
 from revio.application.queue.service import QueueWorker
 from revio.application.repository_configuration import RepositoryConfigurationExecutor
-from revio.application.review.execution import ReviewGenerationService
+from revio.application.review.agent import AgentReviewService
+from revio.application.review.agent_tools import AgentLimits
+from revio.application.review.execution import PreflightedReviewer, ReviewGenerationService
 from revio.application.review.job import ReviewJobExecutor
 from revio.application.review.lifecycle import FindingLifecycleService
 from revio.application.review.markers import load_marker_key, marker_key_id
@@ -37,7 +40,7 @@ from revio.config.queue import QueueSettings
 from revio.config.review import ReviewSettings
 from revio.domain.capabilities import ResolvedModelProfile
 from revio.domain.identifiers import ModelAlias, ProviderId
-from revio.registries import ModelRegistry, ProviderRegistry
+from revio.registries import ModelRegistry, ProviderRegistry, SCMAdapterBundle
 
 # Concrete review adapters known to the composition root. Both satisfy the provider-neutral
 # PreflightedReviewer and AIFindingRevalidator surfaces consumed by the application layer; adding a
@@ -48,6 +51,7 @@ AIReviewAdapter = AnthropicReviewAdapter | OpenAIReviewAdapter
 def resolve_review_profile(settings: ReviewSettings) -> ResolvedModelProfile:
     models = ModelRegistry()
     models.register(anthropic_model_profile())
+    models.register(anthropic_agent_model_profile())
     models.register(openai_model_profile())
     alias = (
         settings.review_model_alias
@@ -58,6 +62,44 @@ def resolve_review_profile(settings: ReviewSettings) -> ResolvedModelProfile:
     if "diff_only" not in profile.allowed_review_modes:
         raise ValueError("resolved review model does not support diff_only")
     return profile
+
+
+def _select_reviewer(
+    ai_adapter: AIReviewAdapter | None,
+    profile: ResolvedModelProfile | None,
+    settings: ReviewSettings,
+    bundle: SCMAdapterBundle | None,
+) -> PreflightedReviewer | None:
+    """Pick the agent reviewer when every gate is satisfied; otherwise stay diff-only.
+
+    Agent mode is triple-gated: the administrator switch, an agent-capable model profile (declaring
+    the ``agent`` mode and native tool use), and an SCM that advertises file and tree access. Any
+    missing gate falls back to the diff-only reviewer with byte-identical behavior.
+    """
+    if ai_adapter is None or profile is None:
+        return ai_adapter
+    if (
+        settings.review_agent_mode_enabled
+        and "agent" in profile.allowed_review_modes
+        and profile.native_tools
+        and isinstance(ai_adapter, AnthropicReviewAdapter)
+        and bundle is not None
+        and bundle.repository_content is not None
+        and bundle.capabilities.repository_file_access
+        and bundle.capabilities.tree_access
+    ):
+        return AgentReviewService(
+            ai_adapter,
+            bundle.repository_content,
+            limits=AgentLimits(
+                max_tool_calls=settings.review_agent_max_tool_calls,
+                max_files=settings.review_agent_max_files,
+                max_bytes_per_file=settings.review_agent_max_bytes_per_file,
+                max_aggregate_bytes=settings.review_agent_max_aggregate_bytes,
+            ),
+            max_turns=settings.review_agent_max_turns,
+        )
+    return ai_adapter
 
 
 async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
@@ -93,6 +135,9 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
         ai_adapter = ai_adapters.get(review_profile.provider_id)
         if ai_adapter is None:
             raise ValueError("selected review provider is not enabled")
+    reviewer = _select_reviewer(
+        ai_adapter, review_profile, review_settings, github.bundle if github is not None else None
+    )
     if github is None and not github_settings.github_allow_idle_worker:
         raise ValueError("worker requires an enabled provider adapter")
     lock = MaintenanceLock(
@@ -158,7 +203,11 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                             ReviewJobExecutor(
                                 store.reviews,
                                 github.adapter,
-                                ReviewGenerationService(store.reviews, ai_adapter, review_settings),
+                                ReviewGenerationService(
+                                    store.reviews,
+                                    cast(PreflightedReviewer, reviewer),
+                                    review_settings,
+                                ),
                                 cast(ResolvedModelProfile, review_profile),
                                 review_settings,
                                 writer=github.writer,
