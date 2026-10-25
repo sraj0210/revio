@@ -1,0 +1,11 @@
+{
+  "id": "correctness-mutable-default",
+  "description": "Mutable default argument shared across calls (local).",
+  "change_request": {"title": "Add accumulator", "description": "Collect items."},
+  "diff_files": [{"new_path": "app/util.py", "status": "modified", "lines": [
+    {"content": "def add_item(item, bucket=[]):", "side": "new", "new_line": 20},
+    {"content": "    bucket.append(item)", "side": "new", "new_line": 21},
+    {"content": "    return bucket", "side": "new", "new_line": 22}
+  ]}],
+  "labels": [{"path": "app/util.py", "line": 20, "category": "correctness", "note": "mutable default arg"}]
+}

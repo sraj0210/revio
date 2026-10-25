@@ -48,6 +48,7 @@ addopts = ["--strict-config", "--strict-markers", "-ra"]
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "strict"
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
@@ -60,7 +61,7 @@ select = ["E", "F", "I", "N", "UP", "B", "ASYNC", "RUF"]
 "tests/**/*.py" = ["S101"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "evals"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 venvPath = "."

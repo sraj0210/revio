@@ -1,0 +1,11 @@
+{
+  "id": "reliability-resource-leak",
+  "description": "File opened without a context manager or close (local).",
+  "change_request": {"title": "Read config", "description": "Load config file."},
+  "diff_files": [{"new_path": "app/config.py", "status": "modified", "lines": [
+    {"content": "def load(path):", "side": "new", "new_line": 5},
+    {"content": "    f = open(path)", "side": "new", "new_line": 6},
+    {"content": "    return f.read()", "side": "new", "new_line": 7}
+  ]}],
+  "labels": [{"path": "app/config.py", "line": 6, "category": "reliability", "note": "file handle leak"}]
+}

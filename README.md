@@ -202,6 +202,22 @@ uv run pytest
 Found a vulnerability? Please follow [SECURITY.md](SECURITY.md). Do not open a public issue for
 security reports.
 
+## Measuring review quality
+
+Review quality is measurable, not asserted. The harness under `evals/` replays labeled cases through
+the real review pipeline and reports **recall**, **precision**, **clean-diff false-alarm rate**, and
+run-to-run variance — compared across provider (Anthropic/OpenAI) and mode (diff-only/agent):
+
+```bash
+VENAROQ_ANTHROPIC_ENABLED=true VENAROQ_ANTHROPIC_API_KEY=sk-... \
+  uv run python -m evals.harness.cli --provider anthropic --mode diff-only
+```
+
+It's a live, on-demand tool (it calls the provider), separate from the test suite. The shipped case
+set is a synthetic starter, so the numbers are **directional** — built for provider/mode A/B and
+regression tracking, not an absolute accuracy claim. See
+[the runbook](docs/runbooks/review-quality-evaluation.md).
+
 ## Contributing
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) to get started, and please follow

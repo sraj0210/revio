@@ -1,0 +1,11 @@
+{
+  "id": "clean-typing",
+  "description": "Adds type hints and a docstring; no defect; no finding expected.",
+  "change_request": {"title": "Type the API", "description": "Annotate signatures."},
+  "diff_files": [{"new_path": "app/api.py", "status": "modified", "lines": [
+    {"content": "def greet(name: str) -> str:", "side": "new", "new_line": 8},
+    {"content": "    \"\"\"Return a greeting for name.\"\"\"", "side": "new", "new_line": 9},
+    {"content": "    return f\"Hello, {name}\"", "side": "new", "new_line": 10}
+  ]}],
+  "labels": []
+}
