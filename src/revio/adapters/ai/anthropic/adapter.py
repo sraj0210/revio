@@ -7,6 +7,8 @@ import httpx
 from pydantic import ValidationError
 
 from revio.adapters.ai.review_schema import (
+    AGENT_SYSTEM_PROMPT,
+    PATH_TOOL_INPUT_SCHEMA,
     REVALIDATION_JSON_SCHEMA,
     REVALIDATION_SYSTEM_PROMPT,
     REVIEW_JSON_SCHEMA,
@@ -20,6 +22,7 @@ from revio.adapters.ai.review_schema import (
 )
 from revio.config.anthropic import AnthropicSettings
 from revio.config.review import ReviewSettings
+from revio.domain.agent import AgentToolRequest, AgentToolResult, AgentTurnResult
 from revio.domain.capabilities import ResolvedModelProfile
 from revio.domain.identifiers import ModelAlias, ProviderId
 from revio.domain.models import ReviewRequest, ReviewResult, TokenUsage
@@ -45,6 +48,26 @@ ANTHROPIC_PROVIDER_ID = ProviderId(value="anthropic")
 # Anthropic transport, usage parsing, and error mapping live here.
 SYSTEM_PROMPT = REVIEW_SYSTEM_PROMPT
 
+# Agent-mode tools. get_file/get_tree are read-only and executed by the core; submit_review carries
+# the final structured review as its input so tool use and structured output never conflict.
+_AGENT_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "get_tree",
+        "description": "List a repository directory at the pull-request head commit.",
+        "input_schema": PATH_TOOL_INPUT_SCHEMA,
+    },
+    {
+        "name": "get_file",
+        "description": "Read one repository file at the pull-request head to verify a finding.",
+        "input_schema": PATH_TOOL_INPUT_SCHEMA,
+    },
+    {
+        "name": "submit_review",
+        "description": "Submit the final structured review. Call this exactly once when done.",
+        "input_schema": REVIEW_JSON_SCHEMA,
+    },
+]
+
 
 def anthropic_model_profile() -> ResolvedModelProfile:
     return ResolvedModelProfile(
@@ -56,6 +79,25 @@ def anthropic_model_profile() -> ResolvedModelProfile:
         structured_output="json_schema",
         prompt_caching=True,
         allowed_review_modes=frozenset({"diff_only"}),
+        profile_version="1",
+        thinking="disabled",
+        use_default_sampling=True,
+        token_counting=True,
+    )
+
+
+def anthropic_agent_model_profile() -> ResolvedModelProfile:
+    """Agent-capable Anthropic profile; declares native tool use and the ``agent`` review mode."""
+    return ResolvedModelProfile(
+        alias=ModelAlias(value="agent-review-default"),
+        provider_id=ANTHROPIC_PROVIDER_ID,
+        provider_model_id="claude-sonnet-5",
+        context_tokens=1_000_000,
+        max_output_tokens=128_000,
+        structured_output="json_schema",
+        native_tools=True,
+        prompt_caching=True,
+        allowed_review_modes=frozenset({"diff_only", "agent"}),
         profile_version="1",
         thinking="disabled",
         use_default_sampling=True,
@@ -372,3 +414,131 @@ class AnthropicReviewAdapter:
                 "Anthropic revalidation response failed local validation", usage=observed_usage
             ) from None
         return build_revalidation_result(parsed, usage)
+
+    # --- Agent mode (bounded, read-only tool loop) ---------------------------------------------
+
+    @staticmethod
+    def _usage_from(body: dict[str, Any]) -> TokenUsage:
+        raw_usage = body["usage"]
+        if not isinstance(raw_usage, dict):
+            raise TypeError
+        raw_usage = cast(dict[str, object], raw_usage)
+        usage_values: dict[str, object] = {
+            "uncached_input_tokens": raw_usage["input_tokens"],
+            "cached_input_tokens": raw_usage.get("cache_read_input_tokens", 0),
+            "cache_creation_tokens": raw_usage.get("cache_creation_input_tokens", 0),
+            "output_tokens": raw_usage["output_tokens"],
+        }
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in usage_values.values()
+        ):
+            raise ValueError
+        return TokenUsage(**{key: cast(int, value) for key, value in usage_values.items()})
+
+    def _agent_payload(self, request: ReviewRequest) -> dict[str, Any]:
+        profile = request.model_profile
+        if profile.thinking != "disabled" or not profile.use_default_sampling:
+            raise ValueError("model profile is not deterministic")
+        return {
+            "model": profile.provider_model_id,
+            "max_tokens": min(
+                profile.max_output_tokens, self._review_settings.review_output_token_ceiling
+            ),
+            "thinking": {"type": "disabled"},
+            "system": [
+                {
+                    "type": "text",
+                    "text": AGENT_SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "tools": _AGENT_TOOLS,
+            "messages": [{"role": "user", "content": serialize_review_content(request)}],
+        }
+
+    async def agent_preflight(self, request: ReviewRequest) -> dict[str, Any]:
+        payload = self._agent_payload(request)
+        estimated = await self._count(payload)
+        if estimated > self._review_settings.admission_token_ceiling:
+            raise IncompleteReviewInputError("agent review input exceeds admission ceiling")
+        return {**payload, "_revio_estimated_input_tokens": estimated}
+
+    async def agent_turn(self, payload: dict[str, Any]) -> AgentTurnResult:
+        request_payload = {
+            key: value for key, value in payload.items() if not key.startswith("_revio")
+        }
+        response = await self._post_messages(request_payload)
+        try:
+            body = cast(dict[str, Any], response.json())
+            usage = self._usage_from(body)
+            stop_reason = body.get("stop_reason")
+            if stop_reason in {"refusal", "max_tokens"}:
+                raise ProviderCallObservedTerminalError(
+                    f"Anthropic stopped with {stop_reason}", usage=usage, reason=str(stop_reason)
+                )
+            blocks = cast(list[dict[str, Any]], body["content"])
+            tool_uses = [block for block in blocks if block.get("type") == "tool_use"]
+            submit = next((b for b in tool_uses if b.get("name") == "submit_review"), None)
+            if submit is not None:
+                review = build_review_result(ReviewDTO.model_validate(submit["input"]), usage)
+                return AgentTurnResult(final_review=review, usage=usage, payload=payload)
+            fetches = [b for b in tool_uses if b.get("name") in ("get_file", "get_tree")]
+            if fetches:
+                messages = [
+                    *cast(list[dict[str, Any]], payload["messages"]),
+                    {
+                        "role": "assistant",
+                        "content": blocks,
+                    },
+                ]
+                calls = tuple(
+                    AgentToolRequest(
+                        call_id=str(block["id"]),
+                        name=str(block["name"]),
+                        arguments=cast(dict[str, object], block.get("input") or {}),
+                    )
+                    for block in fetches
+                )
+                return AgentTurnResult(
+                    tool_calls=calls, usage=usage, payload={**payload, "messages": messages}
+                )
+            texts = [block["text"] for block in blocks if block.get("type") == "text"]
+            if len(texts) != 1:
+                raise ValueError
+            review = build_review_result(ReviewDTO.model_validate_json(texts[0]), usage)
+            return AgentTurnResult(final_review=review, usage=usage, payload=payload)
+        except (
+            ProviderCallRejectedError,
+            ProviderCallTerminalError,
+            ProviderCallObservedTerminalError,
+            ProviderCallObservedInvalidResponseError,
+        ):
+            raise
+        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            observed_usage = locals().get("usage")
+            if not isinstance(observed_usage, TokenUsage):
+                raise ProviderCallObservedInvalidResponseError(
+                    "Anthropic 2xx agent turn could not be normalized"
+                ) from None
+            raise MalformedProviderOutputError(
+                "Anthropic agent turn failed local validation", usage=observed_usage
+            ) from None
+
+    def append_tool_results(
+        self, payload: dict[str, Any], results: tuple[AgentToolResult, ...]
+    ) -> dict[str, Any]:
+        blocks = [
+            {
+                "type": "tool_result",
+                "tool_use_id": result.call_id,
+                "content": result.content,
+                "is_error": not result.ok,
+            }
+            for result in results
+        ]
+        messages = [
+            *cast(list[dict[str, Any]], payload["messages"]),
+            {"role": "user", "content": blocks},
+        ]
+        return {**payload, "messages": messages}

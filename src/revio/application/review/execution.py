@@ -10,6 +10,7 @@ from revio.config.review import ReviewSettings
 from revio.domain.capabilities import ResolvedModelProfile
 from revio.domain.configuration import EffectiveReviewPolicy, path_is_excluded
 from revio.domain.models import (
+    AgentProvenance,
     ChangeRequest,
     DiffCollection,
     DiffFile,
@@ -154,7 +155,7 @@ def _source_fragments(files: tuple[DiffFile, ...]) -> tuple[str, ...]:
     )
 
 
-def _contains_long_verbatim_source(
+def contains_long_verbatim_source(
     prose: tuple[str, ...], source_fragments: tuple[str, ...]
 ) -> bool:
     """Detect an exact source/prose match of at least the documented threshold."""
@@ -185,11 +186,14 @@ def build_artifact(
     now: datetime,
     source_fragments: tuple[str, ...] = (),
     warning: str | None = None,
+    provenance: AgentProvenance | None = None,
 ) -> NormalizedReviewArtifact:
     if warning is not None:
         summary = f"{warning}\n\n{summary}"[:8000]
+    if provenance is not None and provenance.note():
+        summary = f"{summary}\n\n{provenance.note()}"[:8000]
     prose = (summary, *(item.title for item in findings), *(item.explanation for item in findings))
-    if any("```" in value for value in prose) or _contains_long_verbatim_source(
+    if any("```" in value for value in prose) or contains_long_verbatim_source(
         prose, source_fragments
     ):
         summary = CONTENT_LIMIT_SUMMARY
@@ -208,6 +212,14 @@ def build_artifact(
         "partial": partial,
         "reasons": [str(item) for item in reasons],
     }
+    if provenance is not None:
+        digest_input["provenance"] = {
+            "complete": provenance.complete,
+            "consulted": [
+                {"path": item.path, "ref": item.ref, "kind": item.kind}
+                for item in provenance.consulted
+            ],
+        }
     return NormalizedReviewArtifact(
         review_run_id=run_id,
         artifact_version=ARTIFACT_VERSION,
@@ -576,29 +588,33 @@ class ReviewGenerationService:
             item for item in result.findings if item.confidence >= effective.summary_confidence
         )
         overflow = len(accepted) > self._settings.review_max_findings
-        partial = overflow or token_reduced
+        partial = overflow or token_reduced or result.partial
         routed = tuple(
             item.model_copy(
                 update={"inline_eligible": item.confidence >= effective.inline_confidence}
             )
             for item in accepted[: self._settings.review_max_findings]
         )
+        # Preserve the original diff-only precedence (overflow wins over token reduction) so
+        # non-agent artifacts remain byte-identical; the agent reason is additive.
+        reasons: list[PartialReason] = []
+        if overflow:
+            reasons.append(PartialReason.FINDINGS_TRUNCATED)
+        elif token_reduced:
+            reasons.append(PartialReason.INPUT_TRUNCATED)
+        if result.partial:
+            reasons.append(PartialReason.AGENT_INCOMPLETE)
         artifact = build_artifact(
             run_id=run_id,
             profile=profile,
             summary=result.summary,
             findings=() if partial else routed,
             partial=partial,
-            reasons=(
-                (PartialReason.FINDINGS_TRUNCATED,)
-                if overflow
-                else (PartialReason.INPUT_TRUNCATED,)
-                if token_reduced
-                else ()
-            ),
+            reasons=tuple(dict.fromkeys(reasons)),
             now=current_time,
             source_fragments=source_fragments,
             warning=warning,
+            provenance=result.provenance,
         )
         await self._repository.persist_artifact(artifact, ReviewRunState.GENERATION_ATTEMPTED)
         await self._repository.transition_call(
