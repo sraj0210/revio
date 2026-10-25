@@ -5,17 +5,22 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from revio.adapters.observability import configure_logging
+from revio.adapters.observability.prometheus import PrometheusQueueMetrics
+from revio.adapters.observability.server import serve_metrics
 from revio.adapters.persistence.sqlite import SQLiteStore
 from revio.adapters.persistence.sqlite.locks import MaintenanceLock
 from revio.adapters.scm.github import GITHUB_PROVIDER_ID
 from revio.adapters.scm.github.composition import GitHubComposition, compose_github
 from revio.adapters.scm.github.webhook.ingress import GitHubSandboxWebhookIngress
 from revio.adapters.scm.github.webhook.route import router as github_webhook_router
+from revio.api.ratelimit import FixedWindowRateLimiter
 from revio.api.routes.health import router as health_router
 from revio.api.routes.readiness import router as readiness_router
 from revio.application.review.markers import load_marker_key, marker_key_id
 from revio.config.database import DatabaseSettings
 from revio.config.github import GitHubSettings
+from revio.config.observability import ObservabilitySettings
 from revio.config.queue import QueueSettings
 from revio.config.review import ReviewSettings
 from revio.registries import ProviderRegistry
@@ -30,6 +35,7 @@ def create_app(
     review_settings: ReviewSettings | None = None,
 ) -> FastAPI:
     """Build and configure the Revio ASGI application."""
+    configure_logging()
     github_settings = settings or GitHubSettings()
     review_policy = review_settings or ReviewSettings()
     registry = ProviderRegistry()
@@ -40,6 +46,7 @@ def create_app(
     durable = persistence
     if github_settings.github_webhook_mode == "durable" and durable is None:
         durable = SQLiteStore(database_settings or DatabaseSettings(), queue_settings)
+    observability = ObservabilitySettings()
     runtime_lock: MaintenanceLock | None = None
 
     @asynccontextmanager
@@ -60,8 +67,15 @@ def create_app(
                     runtime_lock.release()
                     runtime_lock = None
                     raise RuntimeError("unresolved publication uses another marker key")
+        metrics = durable.metrics if durable is not None else None
         try:
-            yield
+            if observability.metrics_enabled and isinstance(metrics, PrometheusQueueMetrics):
+                async with serve_metrics(
+                    metrics, bind=observability.metrics_bind, port=observability.metrics_port
+                ):
+                    yield
+            else:
+                yield
         finally:
             if runtime_lock is not None:
                 runtime_lock.release()
@@ -85,5 +99,9 @@ def create_app(
     )
     application.state.durable_ingress = durable
     application.state.persistence = durable
+    application.state.ingress_rate_limiter = FixedWindowRateLimiter(
+        limit=observability.ingress_rate_limit,
+        window_seconds=observability.ingress_rate_window_seconds,
+    )
     application.include_router(github_webhook_router)
     return application

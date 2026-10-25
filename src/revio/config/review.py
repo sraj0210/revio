@@ -33,6 +33,9 @@ class ReviewSettings(BaseSettings):
     review_allow_repository_optout: bool = False
     review_drafts_enabled: bool = True
     review_protected_exclusions: str = ""
+    # Phase 7: production publishing is unlocked only by an explicit, non-defaulted acknowledgement
+    # together with the preconditions enforced below. It is fail-closed.
+    production_publish_confirmed: bool = False
 
     @property
     def rollout_repositories(self) -> frozenset[str]:
@@ -59,7 +62,13 @@ class ReviewSettings(BaseSettings):
         if self.review_publish_enabled and not self.review_enabled:
             raise ValueError("publishing requires review execution")
         if self.environment == "production" and self.review_publish_enabled:
-            raise ValueError("Phase 4 publishing is forbidden in production")
+            # Fail-closed production-publishing gate: every precondition must hold.
+            if not self.production_publish_confirmed:
+                raise ValueError("production publishing requires explicit confirmation")
+            if not self.rollout_repositories:
+                raise ValueError("production publishing requires a non-empty rollout allow-list")
+            if self.publish_marker_key_file is None:
+                raise ValueError("production publishing requires a marker-key file source")
         marker_sources = sum(
             value is not None for value in (self.publish_marker_key, self.publish_marker_key_file)
         )

@@ -181,7 +181,7 @@ async def test_worker_runtime_rejects_production_review_publishing(
     monkeypatch.setenv("REVIO_REVIEW_ENABLED", "true")
     monkeypatch.setenv("REVIO_REVIEW_PUBLISH_ENABLED", "true")
     monkeypatch.setenv("REVIO_PUBLISH_MARKER_KEY", "x" * 32)
-    with pytest.raises(ValidationError, match="forbidden in production"):
+    with pytest.raises(ValidationError, match="production publishing requires"):
         await run_worker(True)
 
 
