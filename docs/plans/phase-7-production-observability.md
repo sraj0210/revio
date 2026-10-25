@@ -2,9 +2,10 @@
 
 ## Status
 
-Draft for review. This document does not authorize implementation.
+Approved and implemented on the Phase 7 feature branch (`feat/phase-7-production-observability`).
+Merge remains subject to the validation gates below.
 
-Phase 7 starts only after this plan is approved. It preserves every Phase 3 queue-durability,
+Phase 7 preserves every Phase 3 queue-durability,
 Phase 4 provider/write-ambiguity, Phase 5 trusted-base-policy, and Phase 6 finding-lifecycle
 guarantee. Phase 7 is the phase that may, under explicit administrator confirmation, remove the
 blanket production-publishing prohibition; until then and absent that confirmation, production
