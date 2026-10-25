@@ -14,13 +14,13 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.ai.anthropic import AnthropicReviewAdapter, anthropic_model_profile
-from revio.adapters.ai.openai import OpenAIReviewAdapter, openai_model_profile
-from revio.config.anthropic import AnthropicSettings
-from revio.config.openai import OpenAISettings
-from revio.config.review import ReviewSettings
-from revio.domain.capabilities import ResolvedModelProfile
-from revio.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewRequest, ReviewResult
+from venaroq.adapters.ai.anthropic import AnthropicReviewAdapter, anthropic_model_profile
+from venaroq.adapters.ai.openai import OpenAIReviewAdapter, openai_model_profile
+from venaroq.config.anthropic import AnthropicSettings
+from venaroq.config.openai import OpenAISettings
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.capabilities import ResolvedModelProfile
+from venaroq.domain.models import ChangeRequest, DiffFile, DiffLine, ReviewRequest, ReviewResult
 
 
 class _ReviewAdapter(Protocol):

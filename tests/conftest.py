@@ -11,20 +11,20 @@ from alembic.config import Config
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from revio.adapters.persistence.sqlite.connection import CoordinationHook, FailureHook
-from revio.adapters.persistence.sqlite.schema import SCHEMA_REVISION
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.config.database import DatabaseSettings
-from revio.config.queue import QueueSettings
-from revio.domain.capabilities import ResolvedModelProfile
-from revio.domain.identifiers import (
+from venaroq.adapters.persistence.sqlite.connection import CoordinationHook, FailureHook
+from venaroq.adapters.persistence.sqlite.schema import SCHEMA_REVISION
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.config.database import DatabaseSettings
+from venaroq.config.queue import QueueSettings
+from venaroq.domain.capabilities import ResolvedModelProfile
+from venaroq.domain.identifiers import (
     ChangeRequestTarget,
     InstallationRef,
     ModelAlias,
     ProviderId,
     RepositoryRef,
 )
-from revio.domain.models import ChangeRequest
+from venaroq.domain.models import ChangeRequest
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,7 @@ class AlembicDatabase:
 def alembic_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[AlembicDatabase]:
     """Apply Alembic and verify the runtime revision and connection policy."""
     path = tmp_path / "alembic-runtime.db"
-    monkeypatch.setenv("REVIO_DATABASE_PATH", str(path))
+    monkeypatch.setenv("VENAROQ_DATABASE_PATH", str(path))
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
     command.upgrade(config, "head")

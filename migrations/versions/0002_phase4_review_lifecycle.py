@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-from revio.adapters.persistence.sqlite.schema import PHASE4_SCHEMA_SQL
+from venaroq.adapters.persistence.sqlite.schema import PHASE4_SCHEMA_SQL
 
 revision: str = "0002_phase4_review_lifecycle"
 down_revision: str | None = "0001_phase3_durable_queue"

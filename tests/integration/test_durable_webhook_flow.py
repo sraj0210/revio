@@ -10,10 +10,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
-from revio.adapters.persistence.sqlite import SQLiteStore
-from revio.api.app import create_app
-from revio.config.database import DatabaseSettings
-from revio.config.github import GitHubSettings
+from venaroq.adapters.persistence.sqlite import SQLiteStore
+from venaroq.api.app import create_app
+from venaroq.config.database import DatabaseSettings
+from venaroq.config.github import GitHubSettings
 
 
 def _headers(body: bytes, delivery: str = "delivery-1") -> dict[str, str]:
@@ -30,7 +30,7 @@ def _headers(body: bytes, delivery: str = "delivery-1") -> dict[str, str]:
 async def test_durable_acceptance_duplicate_conflict_and_readiness(
     tmp_path: Path, rsa_private_key_pem: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    database = DatabaseSettings(database_path=tmp_path / "revio.db")
+    database = DatabaseSettings(database_path=tmp_path / "venaroq.db")
     store = SQLiteStore(database)
     await store.initialize()
     settings = GitHubSettings(
@@ -82,7 +82,7 @@ async def test_durable_ingress_failure_is_sanitized_503_and_rolls_back(
         if enabled and stage == "after_delivery_job_link":
             raise aiosqlite.OperationalError("sensitive injected SQL detail")
 
-    database = DatabaseSettings(database_path=tmp_path / "revio.db")
+    database = DatabaseSettings(database_path=tmp_path / "venaroq.db")
     store = SQLiteStore(database, failure_hook=fail)
     await store.initialize()
     enabled = True

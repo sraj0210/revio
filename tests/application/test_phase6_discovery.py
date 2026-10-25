@@ -4,24 +4,24 @@ from datetime import UTC, datetime
 
 import pytest
 
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.review.lifecycle import FindingLifecycleService
-from revio.application.review.markers import finding_marker, finding_marker_token, review_marker
-from revio.domain.identifiers import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.application.review.lifecycle import FindingLifecycleService
+from venaroq.application.review.markers import finding_marker, finding_marker_token, review_marker
+from venaroq.domain.identifiers import (
     ChangeRequestTarget,
     InstallationRef,
     ProviderId,
     RepositoryRef,
 )
-from revio.domain.lifecycle import (
+from venaroq.domain.lifecycle import (
     FindingLifecycleState,
     FindingRecord,
     ThreadDiscoveryResult,
     ThreadLinkState,
     ThreadReadResult,
 )
-from revio.domain.models import ChangeRequest, DiffCollection, TreeCollection
-from tests.conftest import AlembicDatabase
+from venaroq.domain.models import ChangeRequest, DiffCollection, TreeCollection
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 KEY = b"0" * 32
@@ -131,9 +131,9 @@ def test_finding_marker_is_deterministic_and_distinct() -> None:
     assert finding_marker_token(KEY, "finding-1") == token
     assert finding_marker_token(KEY, "finding-2") != token
     marker = finding_marker(token)
-    assert marker.startswith("<!-- revio:v1:finding:")
+    assert marker.startswith("<!-- venaroq:v1:finding:")
     # Per-finding markers never collide with the review-level marker namespace.
-    assert "revio:v1:review:" not in marker
+    assert "venaroq:v1:review:" not in marker
     assert review_marker(KEY, "op") != marker
 
 

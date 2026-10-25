@@ -9,14 +9,16 @@ from datetime import UTC, datetime
 
 import pytest
 
-from revio.adapters.ai.anthropic import anthropic_agent_model_profile
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.review.agent import AgentReviewService
-from revio.application.review.agent_tools import AgentLimits
-from revio.application.review.execution import ReviewGenerationService
-from revio.config.review import ReviewSettings
-from revio.domain.agent import AgentToolRequest, AgentTurnResult
-from revio.domain.models import (
+from tests.agent.test_agent_service import FakeAgentAdapter, FakeContent, make_finding
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.ai.anthropic import anthropic_agent_model_profile
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.application.review.agent import AgentReviewService
+from venaroq.application.review.agent_tools import AgentLimits
+from venaroq.application.review.execution import ReviewGenerationService
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.agent import AgentToolRequest, AgentTurnResult
+from venaroq.domain.models import (
     ChangeRequest,
     DiffCollection,
     DiffFile,
@@ -24,9 +26,7 @@ from revio.domain.models import (
     ReviewResult,
     TokenUsage,
 )
-from revio.domain.reviews import PartialReason
-from tests.agent.test_agent_service import FakeAgentAdapter, FakeContent, make_finding
-from tests.conftest import AlembicDatabase
+from venaroq.domain.reviews import PartialReason
 
 
 async def _seed_run(store: SQLiteStore, now: datetime) -> None:

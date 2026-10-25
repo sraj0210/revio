@@ -120,7 +120,7 @@ No GitLab DTO or URL crosses into the core.
 
 ## 7. Configuration
 
-Add `GitLabSettings` (env prefix `REVIO_`): enablement, base URL, allow-listed self-managed hosts,
+Add `GitLabSettings` (env prefix `VENAROQ_`): enablement, base URL, allow-listed self-managed hosts,
 token source (file in production), webhook secret, API version, timeouts, pagination bounds, and the
 rollout/stable-identity components. Stable repository identity is
 `gitlab:<installation/group>:<project id>`, provider-neutral and name-independent.

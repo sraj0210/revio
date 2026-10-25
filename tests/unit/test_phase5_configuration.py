@@ -5,16 +5,16 @@ import math
 import pytest
 from pydantic import ValidationError
 
-from revio.application.review.execution import DiffLimiter
-from revio.config.review import ReviewSettings
-from revio.domain.configuration import (
+from venaroq.application.review.execution import DiffLimiter
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.configuration import (
     CONFIG_WARNING,
     ConfigurationWarningCode,
     parse_repository_configuration,
     path_is_excluded,
     resolve_policy,
 )
-from revio.domain.models import CollectionCompleteness, DiffCollection, DiffFile, DiffLine
+from venaroq.domain.models import CollectionCompleteness, DiffCollection, DiffFile, DiffLine
 
 
 def test_minimal_and_complete_configuration_are_normalized() -> None:
@@ -37,7 +37,7 @@ review:
     )
     assert policy.focus_areas == ("correctness", "security")
     assert policy.exclusions == (
-        ".revio.yml",
+        ".venaroq.yml",
         "vendor/**",
         "docs/**",
         "**/*.generated.py",

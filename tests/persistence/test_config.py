@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from revio.adapters.persistence.sqlite.capabilities import MINIMUM_SQLITE_VERSION
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.config.database import DatabaseSettings
-from revio.config.queue import QueueSettings
-from revio.errors import PersistenceUnavailableError
+from venaroq.adapters.persistence.sqlite.capabilities import MINIMUM_SQLITE_VERSION
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.config.database import DatabaseSettings
+from venaroq.config.queue import QueueSettings
+from venaroq.errors import PersistenceUnavailableError
 
 
 def test_busy_and_active_capacity_defaults_are_aligned() -> None:
@@ -33,19 +33,19 @@ def test_database_path_and_production_durability_are_validated(tmp_path: Path) -
     with pytest.raises(ValidationError):
         DatabaseSettings(
             environment="production",
-            database_path=tmp_path / "revio.db",
+            database_path=tmp_path / "venaroq.db",
             database_wal_enabled=False,
         )
     with pytest.raises(ValidationError):
         DatabaseSettings(
             environment="production",
-            database_path=tmp_path / "revio.db",
+            database_path=tmp_path / "venaroq.db",
             database_synchronous="NORMAL",
         )
     with pytest.raises(ValidationError):
         DatabaseSettings.model_validate(
             {
-                "database_path": tmp_path / "revio.db",
+                "database_path": tmp_path / "venaroq.db",
                 "database_require_current_migration": False,
             }
         )
@@ -81,13 +81,13 @@ async def test_database_path_rejects_symlinks_and_insecure_modes(tmp_path: Path)
     linked_parent = tmp_path / "linked-parent"
     linked_parent.symlink_to(real_parent, target_is_directory=True)
     with pytest.raises(PersistenceUnavailableError):
-        await SQLiteStore(DatabaseSettings(database_path=linked_parent / "revio.db")).initialize()
+        await SQLiteStore(DatabaseSettings(database_path=linked_parent / "venaroq.db")).initialize()
 
     unsafe_parent = tmp_path / "unsafe"
     unsafe_parent.mkdir()
     unsafe_parent.chmod(0o777)
     with pytest.raises(PersistenceUnavailableError):
-        await SQLiteStore(DatabaseSettings(database_path=unsafe_parent / "revio.db")).initialize()
+        await SQLiteStore(DatabaseSettings(database_path=unsafe_parent / "venaroq.db")).initialize()
 
     unsafe_file = tmp_path / "unsafe.db"
     unsafe_file.touch(mode=0o644)

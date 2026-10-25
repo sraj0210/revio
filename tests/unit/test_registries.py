@@ -2,12 +2,16 @@
 
 import pytest
 
-from revio.domain.capabilities import AIProviderCapabilities, ResolvedModelProfile, SCMCapabilities
-from revio.domain.identifiers import ModelAlias, ProviderId
-from revio.domain.models import ChangeRequest, ReviewResult
-from revio.errors import DuplicateRegistrationError, UnknownModelAliasError, UnknownProviderError
-from revio.registries import AIAdapterBundle, ModelRegistry, ProviderRegistry, SCMAdapterBundle
 from tests.fakes import FakeAIReviewer, FakeSCMReader
+from venaroq.domain.capabilities import (
+    AIProviderCapabilities,
+    ResolvedModelProfile,
+    SCMCapabilities,
+)
+from venaroq.domain.identifiers import ModelAlias, ProviderId
+from venaroq.domain.models import ChangeRequest, ReviewResult
+from venaroq.errors import DuplicateRegistrationError, UnknownModelAliasError, UnknownProviderError
+from venaroq.registries import AIAdapterBundle, ModelRegistry, ProviderRegistry, SCMAdapterBundle
 
 
 def test_provider_registry_composes_independent_adapters(change_request: ChangeRequest) -> None:

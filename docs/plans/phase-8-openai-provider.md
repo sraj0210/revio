@@ -31,7 +31,7 @@ the `ProviderRegistry` by `profile.provider_id`. No explicit "which provider" to
 no provider name is ever compared in the orchestrator, execution, or lifecycle layers.
 
 This replaces the two current Anthropic hard-codes in `worker/main.py`
-([`resolve_review_profile`](../../src/revio/worker/main.py) registering only
+([`resolve_review_profile`](../../src/venaroq/worker/main.py) registering only
 `anthropic_model_profile()`, and the `AnthropicReviewAdapter(...)` / `not anthropic_enabled`
 construction) with a provider-additive registry build.
 
@@ -62,7 +62,7 @@ it explicitly; the shipped default alias behavior is unchanged (Anthropic remain
 ### Decision 5 — Config / enablement posture (mirror Anthropic exactly)
 
 Proposed: a new `OpenAISettings` mirroring `AnthropicSettings` field-for-field in security posture:
-`REVIO_OPENAI_ENABLED`, exactly one of `openai_api_key` / `openai_api_key_file` required when
+`VENAROQ_OPENAI_ENABLED`, exactly one of `openai_api_key` / `openai_api_key_file` required when
 enabled, **production requires the file source** (literal env key rejected in production), key file
 must be absolute, URL locked (Decision 3), bounded HTTP timeout. Both providers may be enabled at
 once. The worker requires that the provider selected by the resolved alias is actually enabled and
@@ -93,8 +93,8 @@ OpenAI API key is available; this plan does not claim a live cross-provider run.
 ## 3. Scope and files
 
 New:
-- `src/revio/config/openai.py` — `OpenAISettings` (Decision 5).
-- `src/revio/adapters/ai/openai/__init__.py`, `src/revio/adapters/ai/openai/adapter.py` —
+- `src/venaroq/config/openai.py` — `OpenAISettings` (Decision 5).
+- `src/venaroq/adapters/ai/openai/__init__.py`, `src/venaroq/adapters/ai/openai/adapter.py` —
   `OpenAIReviewAdapter` implementing `AIReviewGenerator` + `AIFindingRevalidator`, `OPENAI_PROVIDER_ID`,
   `openai_model_profile()` (Decisions 2, 4, 6).
 - `docs/adr/0011-openai-second-provider.md` — record the portability seam and the endpoint/model lock.
@@ -102,15 +102,15 @@ New:
   plus OpenAI-specific schema/usage/context/error tests.
 
 Modified (minimal, provider-additive):
-- `src/revio/worker/main.py` — register both model profiles; build enabled AI adapters into the
+- `src/venaroq/worker/main.py` — register both model profiles; build enabled AI adapters into the
   `ProviderRegistry`; select the adapter by `profile.provider_id`; provider-neutral enablement check.
-- `src/revio/api/app.py` / composition — register the OpenAI `AIAdapterBundle` when enabled, if the
+- `src/venaroq/api/app.py` / composition — register the OpenAI `AIAdapterBundle` when enabled, if the
   API path composes AI (parity with how Anthropic is wired).
-- `.env.example`, `docker-compose.yml` — add the `REVIO_OPENAI_*` keys (defaults disabled/empty),
+- `.env.example`, `docker-compose.yml` — add the `VENAROQ_OPENAI_*` keys (defaults disabled/empty),
   mirroring the Anthropic entries.
 - `README.md` — add OpenAI to current capabilities and the provider-selection note.
 
-Explicitly **not** modified: `src/revio/domain/**`, `src/revio/ports/ai.py`, the orchestrator,
+Explicitly **not** modified: `src/venaroq/domain/**`, `src/venaroq/ports/ai.py`, the orchestrator,
 execution, lifecycle, markers, persistence schema, and all SCM adapters.
 
 ## 4. Delivered behavior

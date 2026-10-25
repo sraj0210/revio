@@ -4,8 +4,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.domain.lifecycle import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.domain.lifecycle import (
     FindingLifecycleState,
     FindingOccurrence,
     FindingRecord,
@@ -20,10 +21,9 @@ from revio.domain.lifecycle import (
     ThreadLinkState,
     ThreadResolutionState,
 )
-from revio.domain.models import TokenUsage
-from revio.domain.reviews import UsageDisposition
-from revio.errors import PersistenceIntegrityError
-from tests.conftest import AlembicDatabase
+from venaroq.domain.models import TokenUsage
+from venaroq.domain.reviews import UsageDisposition
+from venaroq.errors import PersistenceIntegrityError
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 DIGEST = "a" * 64

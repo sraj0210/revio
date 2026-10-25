@@ -4,16 +4,17 @@ from datetime import UTC, datetime
 
 import pytest
 
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.review.lifecycle import FindingLifecycleService
-from revio.domain.identifiers import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.application.review.lifecycle import FindingLifecycleService
+from venaroq.domain.identifiers import (
     ChangeRequestTarget,
     InstallationRef,
     ProviderId,
     RepositoryRef,
 )
-from revio.domain.lifecycle import OccurrenceDisposition
-from revio.domain.models import (
+from venaroq.domain.lifecycle import OccurrenceDisposition
+from venaroq.domain.models import (
     ChangeRequest,
     DiffCollection,
     DiffFile,
@@ -22,8 +23,7 @@ from revio.domain.models import (
     FindingIdentity,
     TreeCollection,
 )
-from revio.domain.reviews import NormalizedReviewArtifact
-from tests.conftest import AlembicDatabase
+from venaroq.domain.reviews import NormalizedReviewArtifact
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 EVIDENCE = 'query = f"SELECT ... {name}"'

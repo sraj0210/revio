@@ -2,11 +2,11 @@
 
 - Status: Accepted for Phase 1
 - Date: 2026-07-19
-- Decision owners: Revio maintainers
+- Decision owners: Venaroq maintainers
 
 ## Context
 
-Revio must add SCM and AI providers without leaking provider SDK types or forcing unsupported future methods onto adapters. AI behavior also varies by model, not merely provider.
+Venaroq must add SCM and AI providers without leaking provider SDK types or forcing unsupported future methods onto adapters. AI behavior also varies by model, not merely provider.
 
 ## Decision
 

@@ -4,13 +4,18 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from revio.application.repository_configuration import RepositoryConfigurationExecutor
-from revio.config.review import ReviewSettings
-from revio.domain.configuration import ConfigurationResolution, EffectiveReviewPolicy
-from revio.domain.events import ReviewEvent
-from revio.domain.identifiers import ChangeRequestTarget, InstallationRef, ProviderId, RepositoryRef
-from revio.domain.models import ChangeRequest, TreeCollection
-from revio.domain.queue import JobLease, QueueJob, QueueState
+from venaroq.application.repository_configuration import RepositoryConfigurationExecutor
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.configuration import ConfigurationResolution, EffectiveReviewPolicy
+from venaroq.domain.events import ReviewEvent
+from venaroq.domain.identifiers import (
+    ChangeRequestTarget,
+    InstallationRef,
+    ProviderId,
+    RepositoryRef,
+)
+from venaroq.domain.models import ChangeRequest, TreeCollection
+from venaroq.domain.queue import JobLease, QueueJob, QueueState
 
 
 class MemoryConfigurations:
@@ -34,7 +39,7 @@ class Content:
         self.refs: list[str] = []
 
     async def get_file(self, target: ChangeRequestTarget, path: str, ref: str) -> str | None:
-        assert path == ".revio.yml"
+        assert path == ".venaroq.yml"
         self.refs.append(ref)
         return self.value
 
@@ -157,4 +162,4 @@ async def test_invalid_configuration_uses_defaults_with_bounded_warning() -> Non
     )
     assert await service.execute(lease, current) == "completed"
     assert executor.policies[0].warning_text is not None
-    assert executor.policies[0].exclusions == (".revio.yml",)
+    assert executor.policies[0].exclusions == (".venaroq.yml",)

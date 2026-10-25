@@ -6,17 +6,18 @@ from typing import Literal
 
 import pytest
 
-from revio.adapters.ai.anthropic import anthropic_model_profile
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.review.execution import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.ai.anthropic import anthropic_model_profile
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.application.review.execution import (
     CONTENT_LIMIT_SUMMARY,
     LONG_VERBATIM_SOURCE_THRESHOLD,
     ReviewGenerationService,
     build_artifact,
 )
-from revio.config.review import ReviewSettings
-from revio.domain.configuration import EffectiveReviewPolicy
-from revio.domain.models import (
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.configuration import EffectiveReviewPolicy
+from venaroq.domain.models import (
     ChangeRequest,
     DiffCollection,
     DiffFile,
@@ -26,14 +27,14 @@ from revio.domain.models import (
     ReviewResult,
     TokenUsage,
 )
-from revio.domain.reviews import (
+from venaroq.domain.reviews import (
     PartialReason,
     ProviderCallIdentity,
     ProviderCallState,
     ReviewRunState,
     UsageDisposition,
 )
-from revio.errors import (
+from venaroq.errors import (
     IncompleteReviewInputError,
     MalformedProviderOutputError,
     ProviderCallAmbiguousError,
@@ -41,7 +42,6 @@ from revio.errors import (
     ProviderCallObservedTerminalError,
     ProviderCallSafeRetryError,
 )
-from tests.conftest import AlembicDatabase
 
 
 class AmbiguousReviewer:
@@ -198,7 +198,7 @@ class ReducingAdmissionReviewer(AmbiguousReviewer):
         self.estimates.append(estimate)
         if len(request.diff_files) > 1:
             raise IncompleteReviewInputError("reduce")
-        return {"request": request, "_revio_estimated_input_tokens": estimate}
+        return {"request": request, "_venaroq_estimated_input_tokens": estimate}
 
     async def generate_preflighted(self, payload: dict[str, object]) -> ReviewResult:
         self.generations += 1
@@ -343,7 +343,7 @@ async def test_all_excluded_diff_persists_success_without_provider_call(
         diff=_diff(),
         profile=anthropic_model_profile(),
         policy=EffectiveReviewPolicy(
-            exclusions=(".revio.yml", "a.py"),
+            exclusions=(".venaroq.yml", "a.py"),
             summary_confidence=0.6,
             inline_confidence=0.8,
         ),
@@ -535,7 +535,7 @@ async def test_terminal_rejection_restart_never_advances_provider_call_ordinal(
 
     async def seed(kind: Literal["initial", "repair"], state: ProviderCallState) -> None:
         identity = ProviderCallIdentity(
-            id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"revio:provider-call:run:{kind}:1")),
+            id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"venaroq:provider-call:run:{kind}:1")),
             review_run_id="run",
             call_kind=kind,
             call_ordinal=1,
@@ -703,7 +703,7 @@ async def test_restart_after_response_observed_completes_same_call_without_messa
     now = datetime(2026, 1, 1, tzinfo=UTC)
     await _run(store, now)
     identity = ProviderCallIdentity(
-        id=str(uuid.uuid5(uuid.NAMESPACE_URL, "revio:provider-call:run:initial:1")),
+        id=str(uuid.uuid5(uuid.NAMESPACE_URL, "venaroq:provider-call:run:initial:1")),
         review_run_id="run",
         call_kind="initial",
         call_ordinal=1,
@@ -825,7 +825,7 @@ async def test_restart_after_artifact_persistence_finalizes_observed_call(
     now = datetime(2026, 1, 1, tzinfo=UTC)
     await _run(store, now)
     identity = ProviderCallIdentity(
-        id=str(uuid.uuid5(uuid.NAMESPACE_URL, "revio:provider-call:run:initial:1")),
+        id=str(uuid.uuid5(uuid.NAMESPACE_URL, "venaroq:provider-call:run:initial:1")),
         review_run_id="run",
         call_kind="initial",
         call_ordinal=1,

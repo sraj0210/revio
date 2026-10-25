@@ -10,17 +10,17 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import SecretStr
 
-from revio.adapters.scm.github.auth import (
+from venaroq.adapters.scm.github.auth import (
     GitHubAppJWT,
     InstallationToken,
     InstallationTokenCache,
     load_private_key,
 )
-from revio.adapters.scm.github.errors import (
+from venaroq.adapters.scm.github.errors import (
     GitHubAuthenticationError,
     GitHubConfigurationError,
 )
-from revio.config.github import GitHubSettings
+from venaroq.config.github import GitHubSettings
 
 
 class FakeClock:

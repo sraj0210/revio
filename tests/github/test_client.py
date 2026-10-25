@@ -6,9 +6,9 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.scm.github.auth import GitHubAppJWT, InstallationTokenCache, load_private_key
-from revio.adapters.scm.github.client import GitHubClient
-from revio.adapters.scm.github.errors import (
+from venaroq.adapters.scm.github.auth import GitHubAppJWT, InstallationTokenCache, load_private_key
+from venaroq.adapters.scm.github.client import GitHubClient
+from venaroq.adapters.scm.github.errors import (
     GitHubAnchorValidationRejectedError,
     GitHubAuthenticationError,
     GitHubNotFoundError,
@@ -19,7 +19,7 @@ from revio.adapters.scm.github.errors import (
     GitHubTransportError,
     GitHubValidationError,
 )
-from revio.config.github import GitHubSettings
+from venaroq.config.github import GitHubSettings
 
 
 def settings(pem: str) -> GitHubSettings:

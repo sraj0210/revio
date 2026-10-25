@@ -2,13 +2,13 @@
 
 from typing import cast
 
-from revio.adapters.scm.github.adapter import GitHubReadAdapter
-from revio.adapters.scm.github.client import GitHubClient
-from revio.ports.scm import (
+from tests.github.test_adapter import FakeClient
+from venaroq.adapters.scm.github.adapter import GitHubReadAdapter
+from venaroq.adapters.scm.github.client import GitHubClient
+from venaroq.ports.scm import (
     ChangeRequestReadPort,
     RepositoryContentReadPort,
 )
-from tests.github.test_adapter import FakeClient
 
 
 def test_github_adapter_exposes_read_ports_only() -> None:

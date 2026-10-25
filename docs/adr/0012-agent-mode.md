@@ -49,7 +49,7 @@ context was complete — surfaced as a compact note in the published review (pat
 only, never fetched content, consistent with the no-raw-content rule).
 
 Agent mode is off by default and triple-gated: the administrator switch
-(`REVIO_REVIEW_AGENT_MODE_ENABLED`), an agent-capable model profile (declaring the `agent` review
+(`VENAROQ_REVIEW_AGENT_MODE_ENABLED`), an agent-capable model profile (declaring the `agent` review
 mode and native tool use — shipped as the `agent-review-default` Anthropic alias), and an SCM that
 advertises file and tree access. If any gate is missing, the review runs diff-only with byte-identical
 behavior. OpenAI ships without an agent-turn adapter and therefore always falls back to diff-only; an

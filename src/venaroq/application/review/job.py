@@ -1,0 +1,939 @@
+"""Phase 4 durable review job execution and GitHub publication."""
+
+import uuid
+from datetime import UTC, datetime
+from typing import Literal, Protocol, cast
+
+from venaroq.application.review.execution import ReviewGenerationService, build_artifact
+from venaroq.application.review.lifecycle import FindingLifecycleService, PublicationProjection
+from venaroq.application.review.markers import marker_key_id, review_marker
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.capabilities import ResolvedModelProfile
+from venaroq.domain.configuration import EffectiveReviewPolicy
+from venaroq.domain.models import ChangeRequest, DiffCollection
+from venaroq.domain.queue import JobLease
+from venaroq.domain.reviews import (
+    NormalizedReviewArtifact,
+    PartialReason,
+    ReviewRunState,
+    ReviewStatusDetails,
+    WriteOperationRecord,
+    WriteOperationState,
+)
+from venaroq.errors import (
+    ProviderAnchorRejectedError,
+    ProviderWriteAmbiguousError,
+    ProviderWriteRejectedError,
+    ReconciliationIntegrityError,
+)
+from venaroq.ports.persistence import ReviewRepository
+from venaroq.ports.scm import ChangeRequestReadPort, ReviewWriterPort
+
+
+def stable_id(kind: str, value: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"venaroq:{kind}:{value}"))
+
+
+def check_summary(value: str) -> str:
+    return value[:1000]
+
+
+def publication_summary(artifact: NormalizedReviewArtifact) -> str:
+    summary_findings = tuple(
+        finding for finding in artifact.findings if not finding.inline_eligible
+    )
+    if not summary_findings:
+        return artifact.summary
+    rendered = "\n".join(
+        f"- {finding.title}: {finding.explanation}" for finding in summary_findings
+    )
+    return f"{artifact.summary}\n\nSummary findings:\n{rendered}"[:8000]
+
+
+NO_NEW_FINDINGS_SUMMARY = "No new findings were published; matching findings are already tracked."
+
+
+def lifecycle_publication_summary(
+    artifact: NormalizedReviewArtifact, projection: PublicationProjection | None
+) -> str:
+    """Publication summary covering only new summary-routed findings for Phase 6."""
+    if projection is None:
+        return publication_summary(artifact)
+    summary_findings = projection.summary_findings
+    if not summary_findings:
+        return artifact.summary
+    rendered = "\n".join(
+        f"- {finding.title}: {finding.explanation}" for finding in summary_findings
+    )
+    return f"{artifact.summary}\n\nSummary findings:\n{rendered}"[:8000]
+
+
+class ConfigurationLinkRepository(Protocol):
+    async def link_run(self, job_id: str, run_id: str, now: datetime) -> bool: ...
+
+
+class ReviewJobExecutor:
+    def __init__(
+        self,
+        repository: ReviewRepository,
+        reader: ChangeRequestReadPort,
+        generation: ReviewGenerationService,
+        profile: ResolvedModelProfile,
+        settings: ReviewSettings,
+        *,
+        writer: ReviewWriterPort | None = None,
+        marker_key: bytes | None = None,
+        configuration_repository: ConfigurationLinkRepository | None = None,
+        lifecycle: FindingLifecycleService | None = None,
+    ) -> None:
+        self._repository = repository
+        self._reader = reader
+        self._generation = generation
+        self._profile = profile
+        self._settings = settings
+        self._writer = writer
+        self._marker_key = marker_key
+        self._configuration_repository = configuration_repository
+        self._lifecycle = lifecycle
+        if settings.review_publish_enabled and (writer is None or marker_key is None):
+            raise ValueError("publishing requires GitHub writer and marker key")
+
+    def _effective_policy(self, policy: EffectiveReviewPolicy | None) -> EffectiveReviewPolicy:
+        return policy or EffectiveReviewPolicy(
+            summary_confidence=self._settings.review_summary_confidence,
+            inline_confidence=self._settings.review_inline_confidence,
+        )
+
+    async def _apply_policy_warning(
+        self,
+        artifact: NormalizedReviewArtifact,
+        policy: EffectiveReviewPolicy | None,
+        now: datetime,
+    ) -> NormalizedReviewArtifact:
+        warning = policy.warning_text if policy is not None else None
+        if warning is None or artifact.summary.startswith(warning):
+            return artifact
+        replacement = build_artifact(
+            run_id=artifact.review_run_id,
+            profile=self._profile,
+            summary=artifact.summary,
+            findings=artifact.findings,
+            partial=artifact.partial,
+            reasons=artifact.reason_codes,
+            now=now,
+            warning=warning,
+        )
+        if not await self._repository.replace_artifact(
+            replacement, expected_digest=artifact.digest
+        ):
+            durable = await self._repository.get_artifact(artifact.review_run_id)
+            if durable is None or not durable.summary.startswith(warning):
+                raise RuntimeError("configuration warning artifact CAS failed")
+            return durable
+        return replacement
+
+    async def _create_or_reconcile_check(
+        self,
+        lease: JobLease,
+        run_id: str,
+        now: datetime,
+    ) -> WriteOperationRecord:
+        assert self._writer is not None
+        target = lease.job.event.change_request
+        assert target is not None
+        external_id = stable_id("check-run", run_id)
+        operation_id = stable_id("check-operation", run_id)
+        operation = await self._repository.reserve_write_operation(
+            "check_run",
+            operation_id=operation_id,
+            run_id=run_id,
+            head_sha=lease.job.event.event_head_sha or "",
+            external_id=external_id,
+            now=now,
+        )
+        if operation.provider_id is not None:
+            return operation
+        reconciliation = await self._writer.reconcile_check_run(
+            target, head_sha=operation.head_sha, external_id=external_id
+        )
+        if reconciliation.match_count > 1:
+            await self._repository.transition_write_operation(
+                "check_run",
+                operation.id,
+                operation.state,
+                WriteOperationState.INTEGRITY_FAILED,
+                now,
+                terminal_reason="multiple_exact_matches",
+            )
+            raise ReconciliationIntegrityError("multiple exact Check Runs found")
+        if reconciliation.match_count == 1:
+            if not reconciliation.collection_complete:
+                return operation
+            await self._repository.transition_write_operation(
+                "check_run",
+                operation.id,
+                operation.state,
+                WriteOperationState.RECONCILED,
+                now,
+                provider_id=reconciliation.provider_ids[0],
+            )
+            return WriteOperationRecord(
+                **operation.model_dump(exclude={"state", "provider_id"}),
+                state=WriteOperationState.RECONCILED,
+                provider_id=reconciliation.provider_ids[0],
+            )
+        if operation.state != WriteOperationState.RESERVED_UNATTEMPTED:
+            return operation
+        if not reconciliation.actionable_zero:
+            return operation
+        if not await self._repository.transition_write_operation(
+            "check_run",
+            operation.id,
+            WriteOperationState.RESERVED_UNATTEMPTED,
+            WriteOperationState.ATTEMPT_STARTED,
+            now,
+            increment_attempt=True,
+        ):
+            raise RuntimeError("Check Run attempt could not start")
+        details = ReviewStatusDetails(
+            external_id=external_id,
+            head_sha=operation.head_sha,
+            status="queued",
+            summary="Review queued.",
+        )
+        try:
+            provider_id = await self._writer.create_check_run(target, details)
+        except ProviderWriteAmbiguousError:
+            await self._repository.transition_write_operation(
+                "check_run",
+                operation.id,
+                WriteOperationState.ATTEMPT_STARTED,
+                WriteOperationState.AMBIGUOUS,
+                now,
+                terminal_reason="create_ambiguous",
+            )
+            after = await self._writer.reconcile_check_run(
+                target, head_sha=operation.head_sha, external_id=external_id
+            )
+            if after.match_count > 1:
+                await self._repository.transition_write_operation(
+                    "check_run",
+                    operation.id,
+                    WriteOperationState.AMBIGUOUS,
+                    WriteOperationState.INTEGRITY_FAILED,
+                    now,
+                    terminal_reason="multiple_exact_matches",
+                )
+                raise ReconciliationIntegrityError("multiple exact Check Runs found") from None
+            if after.match_count == 1 and after.collection_complete:
+                await self._repository.transition_write_operation(
+                    "check_run",
+                    operation.id,
+                    WriteOperationState.AMBIGUOUS,
+                    WriteOperationState.RECONCILED,
+                    now,
+                    provider_id=after.provider_ids[0],
+                )
+                provider_id = after.provider_ids[0]
+            else:
+                await self._repository.transition_run(
+                    run_id,
+                    ReviewRunState.GENERATION_PENDING,
+                    ReviewRunState.CHECK_RUN_INDETERMINATE,
+                    now,
+                    reason="check_run_create_indeterminate",
+                )
+                return WriteOperationRecord(
+                    **operation.model_dump(exclude={"state"}),
+                    state=WriteOperationState.AMBIGUOUS,
+                )
+        else:
+            await self._repository.transition_write_operation(
+                "check_run",
+                operation.id,
+                WriteOperationState.ATTEMPT_STARTED,
+                WriteOperationState.COMPLETED,
+                now,
+                provider_id=provider_id,
+            )
+        return WriteOperationRecord(
+            **operation.model_dump(exclude={"state", "provider_id"}),
+            state=WriteOperationState.COMPLETED,
+            provider_id=provider_id,
+        )
+
+    async def _update_check(
+        self,
+        lease: JobLease,
+        operation: WriteOperationRecord,
+        artifact: NormalizedReviewArtifact,
+        summary: str,
+        *,
+        neutral: bool,
+        status: Literal["in_progress", "completed"] = "completed",
+    ) -> bool:
+        if self._writer is None or operation.provider_id is None:
+            return False
+        target = lease.job.event.change_request
+        assert target is not None
+        details = ReviewStatusDetails(
+            external_id=operation.external_id or stable_id("check-run", artifact.review_run_id),
+            head_sha=operation.head_sha,
+            status=status,
+            conclusion=("neutral" if neutral else "success") if status == "completed" else None,
+            summary=check_summary(summary),
+        )
+        remote = await self._writer.get_check_run(target, operation.provider_id)
+        output = remote.get("output")
+        output_mapping = cast(dict[object, object], output) if isinstance(output, dict) else {}
+        already_applied = (
+            remote.get("status") == status
+            and remote.get("conclusion") == details.conclusion
+            and output_mapping.get("summary") == details.summary
+        )
+        if already_applied:
+            return True
+        if status == "in_progress" and remote.get("status") == "completed":
+            return False
+        try:
+            await self._writer.update_check_run(target, operation.provider_id, details)
+            return True
+        except ProviderWriteAmbiguousError:
+            remote = await self._writer.get_check_run(target, operation.provider_id)
+            output = remote.get("output")
+            output_mapping = cast(dict[object, object], output) if isinstance(output, dict) else {}
+            applied = (
+                remote.get("status") == status
+                and remote.get("conclusion") == details.conclusion
+                and output_mapping.get("summary") == check_summary(summary)
+            )
+            return applied
+
+    async def _finish_check_or_indeterminate(
+        self,
+        lease: JobLease,
+        check: WriteOperationRecord,
+        artifact: NormalizedReviewArtifact,
+        summary: str,
+        now: datetime,
+        *,
+        neutral: bool,
+        indeterminate_reason: str = "terminal_check_update_indeterminate",
+    ) -> bool:
+        if await self._update_check(lease, check, artifact, summary, neutral=neutral):
+            return True
+        if not await self._repository.transition_run(
+            artifact.review_run_id,
+            ReviewRunState.PUBLISHING,
+            ReviewRunState.CHECK_RUN_INDETERMINATE,
+            now,
+            reason=indeterminate_reason,
+        ):
+            raise RuntimeError("terminal Check Run indeterminate transition failed")
+        return False
+
+    async def _publish(
+        self,
+        lease: JobLease,
+        artifact: NormalizedReviewArtifact,
+        diff: DiffCollection,
+        check: WriteOperationRecord,
+        now: datetime,
+        *,
+        projection: PublicationProjection | None = None,
+    ) -> Literal[
+        "completed",
+        "partial",
+        "superseded",
+        "publication_indeterminate",
+        "check_run_indeterminate",
+    ]:
+        assert self._writer is not None and self._marker_key is not None
+        target = lease.job.event.change_request
+        assert target is not None
+        summary_text = lifecycle_publication_summary(artifact, projection)
+        if projection is not None and self._lifecycle is not None:
+            inline_candidates = tuple(finding for finding, _ in projection.inline)
+            marker_of = {
+                finding: self._lifecycle.finding_marker(record_id)
+                for finding, record_id in projection.inline
+            }
+        else:
+            inline_candidates = tuple(
+                finding for finding in artifact.findings if finding.inline_eligible
+            )
+            marker_of = {}
+        current = await self._reader.get_change_request(target)
+        if current.head_sha != check.head_sha:
+            if not await self._finish_check_or_indeterminate(
+                lease,
+                check,
+                artifact,
+                "Superseded by newer head.",
+                now,
+                neutral=True,
+                indeterminate_reason="superseded_terminal_check_indeterminate",
+            ):
+                return "check_run_indeterminate"
+            await self._repository.transition_run(
+                artifact.review_run_id,
+                ReviewRunState.PUBLISHING,
+                ReviewRunState.SUPERSEDED,
+                now,
+                reason="newer_head",
+            )
+            return "superseded"
+        operation_key = stable_id("publish-key", artifact.review_run_id)
+        marker = review_marker(self._marker_key, operation_key)
+        operation = await self._repository.reserve_write_operation(
+            "publish",
+            operation_id=stable_id("publish-operation", artifact.review_run_id),
+            run_id=artifact.review_run_id,
+            head_sha=current.head_sha,
+            operation_key=operation_key,
+            marker=marker,
+            marker_key_id=marker_key_id(self._marker_key),
+            now=now,
+        )
+        reconciliation = await self._writer.reconcile_review(target, marker=marker)
+        if reconciliation.match_count > 1:
+            await self._repository.transition_write_operation(
+                "publish",
+                operation.id,
+                operation.state,
+                WriteOperationState.INTEGRITY_FAILED,
+                now,
+                terminal_reason="multiple_exact_matches",
+            )
+            raise ReconciliationIntegrityError("multiple exact reviews found")
+        if reconciliation.match_count == 1:
+            if not reconciliation.collection_complete:
+                await self._repository.transition_run(
+                    artifact.review_run_id,
+                    ReviewRunState.PUBLISHING,
+                    ReviewRunState.PUBLICATION_INDETERMINATE,
+                    now,
+                    reason="incomplete_reconciliation",
+                )
+                return "publication_indeterminate"
+            if operation.state not in {
+                WriteOperationState.COMPLETED,
+                WriteOperationState.RECONCILED,
+            }:
+                await self._repository.transition_write_operation(
+                    "publish",
+                    operation.id,
+                    operation.state,
+                    WriteOperationState.RECONCILED,
+                    now,
+                    provider_id=reconciliation.provider_ids[0],
+                )
+            if not await self._finish_check_or_indeterminate(
+                lease,
+                check,
+                artifact,
+                summary_text,
+                now,
+                neutral=artifact.partial,
+            ):
+                return "check_run_indeterminate"
+            return "partial" if artifact.partial else "completed"
+        if operation.state != WriteOperationState.RESERVED_UNATTEMPTED:
+            await self._repository.transition_run(
+                artifact.review_run_id,
+                ReviewRunState.PUBLISHING,
+                ReviewRunState.PUBLICATION_INDETERMINATE,
+                now,
+                reason="existing_unresolved_publish",
+            )
+            return "publication_indeterminate"
+        if not reconciliation.actionable_zero:
+            await self._repository.transition_run(
+                artifact.review_run_id,
+                ReviewRunState.PUBLISHING,
+                ReviewRunState.PUBLICATION_INDETERMINATE,
+                now,
+                reason="incomplete_reconciliation",
+            )
+            return "publication_indeterminate"
+        findings = (
+            ()
+            if artifact.partial
+            else self._writer.validate_inline_findings(inline_candidates, diff)
+        )
+        markers = tuple(marker_of[finding] for finding in findings) if marker_of else ()
+        if len(findings) != len(inline_candidates):
+            pvenaroqus_digest = artifact.digest
+            replacement = build_artifact(
+                run_id=artifact.review_run_id,
+                profile=self._profile,
+                summary=artifact.summary,
+                findings=(),
+                partial=True,
+                reasons=(PartialReason.ANCHOR_INVALID,),
+                now=now,
+            )
+            if not await self._repository.replace_artifact(
+                replacement, expected_digest=pvenaroqus_digest
+            ):
+                raise RuntimeError("review artifact anchor downgrade lost its CAS race")
+            artifact = replacement
+            findings = ()
+            markers = ()
+        if not await self._repository.transition_write_operation(
+            "publish",
+            operation.id,
+            WriteOperationState.RESERVED_UNATTEMPTED,
+            WriteOperationState.ATTEMPT_STARTED,
+            now,
+            increment_attempt=True,
+        ):
+            raise RuntimeError("review publication attempt could not start")
+        try:
+            provider_id = await self._writer.publish_review(
+                target,
+                summary=summary_text,
+                findings=findings,
+                marker=marker,
+                commit_id=current.head_sha,
+                markers=markers,
+            )
+        except ProviderAnchorRejectedError:
+            await self._repository.transition_write_operation(
+                "publish",
+                operation.id,
+                WriteOperationState.ATTEMPT_STARTED,
+                WriteOperationState.KNOWN_REJECTED,
+                now,
+                terminal_reason="anchor_validation",
+            )
+            current_again = await self._reader.get_change_request(target)
+            complete = await self._writer.reconcile_review(target, marker=marker)
+            if current_again.head_sha != current.head_sha:
+                if not await self._finish_check_or_indeterminate(
+                    lease,
+                    check,
+                    artifact,
+                    "Superseded by newer head.",
+                    now,
+                    neutral=True,
+                    indeterminate_reason="superseded_terminal_check_indeterminate",
+                ):
+                    return "check_run_indeterminate"
+                await self._repository.transition_run(
+                    artifact.review_run_id,
+                    ReviewRunState.PUBLISHING,
+                    ReviewRunState.SUPERSEDED,
+                    now,
+                    reason="newer_head_after_anchor_rejection",
+                )
+                return "superseded"
+            if complete.match_count > 1:
+                await self._repository.transition_write_operation(
+                    "publish",
+                    operation.id,
+                    WriteOperationState.KNOWN_REJECTED,
+                    WriteOperationState.INTEGRITY_FAILED,
+                    now,
+                    terminal_reason="multiple_exact_matches",
+                )
+                raise ReconciliationIntegrityError("multiple exact reviews found") from None
+            if complete.match_count == 1 and complete.collection_complete:
+                await self._repository.transition_write_operation(
+                    "publish",
+                    operation.id,
+                    WriteOperationState.KNOWN_REJECTED,
+                    WriteOperationState.RECONCILED,
+                    now,
+                    provider_id=complete.provider_ids[0],
+                )
+                if not await self._finish_check_or_indeterminate(
+                    lease,
+                    check,
+                    artifact,
+                    summary_text,
+                    now,
+                    neutral=artifact.partial,
+                ):
+                    return "check_run_indeterminate"
+                return "partial" if artifact.partial else "completed"
+            if not complete.actionable_zero:
+                await self._repository.transition_run(
+                    artifact.review_run_id,
+                    ReviewRunState.PUBLISHING,
+                    ReviewRunState.PUBLICATION_INDETERMINATE,
+                    now,
+                    reason="anchor_reconciliation_incomplete",
+                )
+                return "publication_indeterminate"
+            partial_artifact = build_artifact(
+                run_id=artifact.review_run_id,
+                profile=self._profile,
+                summary=artifact.summary,
+                findings=(),
+                partial=True,
+                reasons=(PartialReason.ANCHOR_RACE,),
+                now=now,
+            )
+            if not await self._repository.replace_artifact(
+                partial_artifact, expected_digest=artifact.digest
+            ):
+                raise RuntimeError("anchor fallback artifact CAS failed") from None
+            artifact = partial_artifact
+            await self._repository.transition_write_operation(
+                "publish",
+                operation.id,
+                WriteOperationState.KNOWN_REJECTED,
+                WriteOperationState.ATTEMPT_STARTED,
+                now,
+                increment_attempt=True,
+            )
+            try:
+                provider_id = await self._writer.publish_review(
+                    target,
+                    summary=summary_text,
+                    findings=(),
+                    marker=marker,
+                    commit_id=current.head_sha,
+                )
+            except ProviderWriteAmbiguousError:
+                await self._repository.transition_write_operation(
+                    "publish",
+                    operation.id,
+                    WriteOperationState.ATTEMPT_STARTED,
+                    WriteOperationState.AMBIGUOUS,
+                    now,
+                    terminal_reason="fallback_ambiguous",
+                )
+                provider_id = ""
+        except ProviderWriteRejectedError:
+            await self._repository.transition_write_operation(
+                "publish",
+                operation.id,
+                WriteOperationState.ATTEMPT_STARTED,
+                WriteOperationState.KNOWN_REJECTED,
+                now,
+                terminal_reason="generic_validation_rejection",
+            )
+            if not await self._repository.transition_run(
+                artifact.review_run_id,
+                ReviewRunState.PUBLISHING,
+                ReviewRunState.PUBLICATION_INDETERMINATE,
+                now,
+                reason="generic_validation_rejection",
+            ):
+                raise RuntimeError("generic validation terminal transition failed") from None
+            await self._update_check(
+                lease,
+                check,
+                artifact,
+                "Review publication was rejected.",
+                neutral=True,
+            )
+            return "publication_indeterminate"
+        except ProviderWriteAmbiguousError:
+            await self._repository.transition_write_operation(
+                "publish",
+                operation.id,
+                WriteOperationState.ATTEMPT_STARTED,
+                WriteOperationState.AMBIGUOUS,
+                now,
+                terminal_reason="publish_ambiguous",
+            )
+            provider_id = ""
+        if not provider_id:
+            after = await self._writer.reconcile_review(target, marker=marker)
+            if after.match_count > 1:
+                await self._repository.transition_write_operation(
+                    "publish",
+                    operation.id,
+                    WriteOperationState.AMBIGUOUS,
+                    WriteOperationState.INTEGRITY_FAILED,
+                    now,
+                    terminal_reason="multiple_exact_matches",
+                )
+                raise ReconciliationIntegrityError("multiple exact reviews found")
+            if after.match_count == 1 and after.collection_complete:
+                provider_id = after.provider_ids[0]
+                await self._repository.transition_write_operation(
+                    "publish",
+                    operation.id,
+                    WriteOperationState.AMBIGUOUS,
+                    WriteOperationState.RECONCILED,
+                    now,
+                    provider_id=provider_id,
+                )
+            else:
+                await self._repository.transition_run(
+                    artifact.review_run_id,
+                    ReviewRunState.PUBLISHING,
+                    ReviewRunState.PUBLICATION_INDETERMINATE,
+                    now,
+                    reason="publication_indeterminate",
+                )
+                await self._update_check(
+                    lease,
+                    check,
+                    artifact,
+                    "Review publication outcome could not be confirmed.",
+                    neutral=True,
+                )
+                return "publication_indeterminate"
+        else:
+            await self._repository.transition_write_operation(
+                "publish",
+                operation.id,
+                WriteOperationState.ATTEMPT_STARTED,
+                WriteOperationState.COMPLETED,
+                now,
+                provider_id=provider_id,
+            )
+        if not await self._finish_check_or_indeterminate(
+            lease,
+            check,
+            artifact,
+            summary_text,
+            now,
+            neutral=artifact.partial,
+        ):
+            return "check_run_indeterminate"
+        return "partial" if artifact.partial else "completed"
+
+    async def execute(
+        self,
+        lease: JobLease,
+        current: ChangeRequest,
+        *,
+        now: datetime | None = None,
+        policy: EffectiveReviewPolicy | None = None,
+    ) -> Literal[
+        "completed", "partial", "superseded", "publication_indeterminate", "check_run_indeterminate"
+    ]:
+        current_time = now or datetime.now(UTC)
+        run_id = stable_id("review-run", lease.job.id)
+        run = await self._repository.create_run(
+            run_id=run_id,
+            job_id=lease.job.id,
+            head_sha=current.head_sha,
+            base_sha=current.base_sha,
+            external_id=stable_id("check-run", run_id),
+            now=current_time,
+        )
+        if self._configuration_repository is not None:
+            linked = await self._configuration_repository.link_run(
+                lease.job.id, run.id, current_time
+            )
+            if not linked:
+                raise RuntimeError("durable configuration could not link to review run")
+        terminal_outcomes = {
+            ReviewRunState.COMPLETED: "completed",
+            ReviewRunState.PARTIAL: "partial",
+            ReviewRunState.SUPERSEDED: "superseded",
+            ReviewRunState.PUBLICATION_INDETERMINATE: "publication_indeterminate",
+            ReviewRunState.CHECK_RUN_INDETERMINATE: "check_run_indeterminate",
+        }
+        if run.state in terminal_outcomes:
+            return terminal_outcomes[run.state]  # type: ignore[return-value]
+        if not self._settings.review_publish_enabled:
+            diff = await self._reader.get_diff(current.target)
+            artifact = await self._generation.generate(
+                run_id=run.id,
+                change_request=current,
+                diff=diff,
+                profile=self._profile,
+                policy=policy,
+                now=current_time,
+            )
+            artifact = await self._apply_policy_warning(artifact, policy, current_time)
+            if not await self._repository.transition_run(
+                run.id,
+                ReviewRunState.ARTIFACT_DURABLE,
+                ReviewRunState.PARTIAL if artifact.partial else ReviewRunState.COMPLETED,
+                current_time,
+            ):
+                raise RuntimeError("review run terminal transition failed")
+            return "partial" if artifact.partial else "completed"
+        check = await self._create_or_reconcile_check(lease, run.id, current_time)
+        if check.provider_id is None:
+            current_run = await self._repository.get_run(run.id)
+            if current_run is not None and current_run.state == ReviewRunState.GENERATION_PENDING:
+                if not await self._repository.transition_run(
+                    run.id,
+                    ReviewRunState.GENERATION_PENDING,
+                    ReviewRunState.CHECK_RUN_INDETERMINATE,
+                    current_time,
+                    reason="check_run_reconciliation_incomplete",
+                ):
+                    raise RuntimeError("Check Run indeterminate transition failed")
+            return "check_run_indeterminate"
+        if run.state in {ReviewRunState.ARTIFACT_DURABLE, ReviewRunState.PUBLISHING}:
+            artifact = await self._repository.get_artifact(run.id)
+            if artifact is None:
+                raise RuntimeError("durable review stage is missing its artifact")
+            artifact = await self._apply_policy_warning(artifact, policy, current_time)
+            diff = await self._reader.get_diff(current.target)
+        else:
+            in_progress = await self._update_check(
+                lease,
+                check,
+                build_artifact(
+                    run_id=run.id,
+                    profile=self._profile,
+                    summary="Review in progress.",
+                    findings=(),
+                    partial=False,
+                    reasons=(),
+                    now=current_time,
+                ),
+                "Review in progress.",
+                neutral=False,
+                status="in_progress",
+            )
+            if not in_progress:
+                if not await self._repository.transition_run(
+                    run.id,
+                    run.state,
+                    ReviewRunState.CHECK_RUN_INDETERMINATE,
+                    current_time,
+                    reason="check_run_update_indeterminate",
+                ):
+                    raise RuntimeError("Check Run update indeterminate transition failed")
+                return "check_run_indeterminate"
+            diff = await self._reader.get_diff(current.target)
+            artifact = await self._generation.generate(
+                run_id=run.id,
+                change_request=current,
+                diff=diff,
+                profile=self._profile,
+                policy=policy,
+                now=current_time,
+            )
+            artifact = await self._apply_policy_warning(artifact, policy, current_time)
+        if run.state != ReviewRunState.PUBLISHING:
+            if not await self._repository.transition_run(
+                run.id,
+                ReviewRunState.ARTIFACT_DURABLE,
+                ReviewRunState.PUBLISHING,
+                current_time,
+            ):
+                raise RuntimeError("review run could not enter publishing")
+        outcome = await self._publish_with_lifecycle(
+            lease, run.id, current, artifact, diff, check, policy, current_time
+        )
+        if outcome in {"completed", "partial"}:
+            if not await self._repository.transition_run(
+                run.id,
+                ReviewRunState.PUBLISHING,
+                ReviewRunState.PARTIAL if outcome == "partial" else ReviewRunState.COMPLETED,
+                current_time,
+            ):
+                raise RuntimeError("review run terminal transition failed")
+        return outcome
+
+    async def _publish_with_lifecycle(
+        self,
+        lease: JobLease,
+        run_id: str,
+        current: ChangeRequest,
+        artifact: NormalizedReviewArtifact,
+        diff: DiffCollection,
+        check: WriteOperationRecord,
+        policy: EffectiveReviewPolicy | None,
+        now: datetime,
+    ) -> Literal[
+        "completed",
+        "partial",
+        "superseded",
+        "publication_indeterminate",
+        "check_run_indeterminate",
+    ]:
+        if self._lifecycle is None:
+            return await self._publish(lease, artifact, diff, check, now)
+        effective = self._effective_policy(policy)
+        # 1. Deduplicate and project only-new findings (never for a partial artifact).
+        projection = None
+        if not artifact.partial:
+            projection = await self._lifecycle.deduplicate(
+                run_id=run_id, current=current, artifact=artifact, diff=diff, now=now
+            )
+        # 2. Select priors, collect latest-head evidence, and revalidate durably.
+        superseded = await self._lifecycle.run_revalidation(
+            run_id=run_id,
+            current=current,
+            diff=diff,
+            policy=effective,
+            profile=self._profile,
+            now=now,
+        )
+        if superseded:
+            return await self._finish_superseded(lease, run_id, check, artifact, now)
+        # 3a. No new publishable findings on a complete run: finish the Check Run without a POST.
+        if projection is not None and not projection.has_new:
+            current_again = await self._reader.get_change_request(current.target)
+            if current_again.head_sha != check.head_sha:
+                return await self._finish_superseded(lease, run_id, check, artifact, now)
+            summary = NO_NEW_FINDINGS_SUMMARY
+            if effective.warning_text is not None:
+                summary = f"{effective.warning_text}\n\n{summary}"
+            if not await self._finish_check_or_indeterminate(
+                lease, check, artifact, summary, now, neutral=False
+            ):
+                return "check_run_indeterminate"
+            await self._lifecycle.resolve_threads(
+                run_id=run_id, current=current, validated_head=current.head_sha, now=now
+            )
+            return "completed"
+        # 3b. Publish only the new findings (with per-finding markers).
+        outcome = await self._publish(lease, artifact, diff, check, now, projection=projection)
+        # 4. Register links, discover threads, and resolve confirmed-fixed priors.
+        if outcome in {"completed", "partial"} and projection is not None:
+            if outcome == "completed":
+                for _, record_id in projection.inline:
+                    await self._lifecycle.register_pending_link(
+                        run_id=run_id, finding_record_id=record_id, provider_review_id=None, now=now
+                    )
+                for _, record_id in projection.summary_pairs:
+                    await self._lifecycle.register_not_threaded(
+                        run_id=run_id, finding_record_id=record_id, now=now
+                    )
+                await self._lifecycle.discover_and_link(
+                    run_id=run_id, target=current.target, now=now
+                )
+            else:
+                # An anchor downgrade published summary-only; new findings are not threaded.
+                for _, record_id in projection.new:
+                    await self._lifecycle.register_not_threaded(
+                        run_id=run_id, finding_record_id=record_id, now=now
+                    )
+        if outcome in {"completed", "partial"}:
+            await self._lifecycle.resolve_threads(
+                run_id=run_id, current=current, validated_head=current.head_sha, now=now
+            )
+        return outcome
+
+    async def _finish_superseded(
+        self,
+        lease: JobLease,
+        run_id: str,
+        check: WriteOperationRecord,
+        artifact: NormalizedReviewArtifact,
+        now: datetime,
+    ) -> Literal["superseded", "check_run_indeterminate"]:
+        if not await self._finish_check_or_indeterminate(
+            lease,
+            check,
+            artifact,
+            "Superseded by newer head.",
+            now,
+            neutral=True,
+            indeterminate_reason="superseded_terminal_check_indeterminate",
+        ):
+            return "check_run_indeterminate"
+        await self._repository.transition_run(
+            run_id,
+            ReviewRunState.PUBLISHING,
+            ReviewRunState.SUPERSEDED,
+            now,
+            reason="newer_head_during_revalidation",
+        )
+        return "superseded"

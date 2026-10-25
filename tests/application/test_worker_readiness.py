@@ -9,10 +9,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import ValidationError
 
-from revio.adapters.persistence.sqlite import SQLiteStore
-from revio.adapters.scm.github.errors import GitHubConfigurationError
-from revio.config.database import DatabaseSettings
-from revio.worker.main import main, run_worker
+from venaroq.adapters.persistence.sqlite import SQLiteStore
+from venaroq.adapters.scm.github.errors import GitHubConfigurationError
+from venaroq.config.database import DatabaseSettings
+from venaroq.worker.main import main, run_worker
 
 
 async def _database(path: Path) -> None:
@@ -20,20 +20,20 @@ async def _database(path: Path) -> None:
 
 
 def _configure_database(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
-    monkeypatch.setenv("REVIO_DATABASE_PATH", str(path))
-    monkeypatch.delenv("REVIO_GITHUB_PRIVATE_KEY", raising=False)
-    monkeypatch.delenv("REVIO_GITHUB_PRIVATE_KEY_FILE", raising=False)
-    monkeypatch.delenv("REVIO_GITHUB_APP_ID", raising=False)
-    monkeypatch.delenv("REVIO_GITHUB_ENABLED", raising=False)
-    monkeypatch.delenv("REVIO_GITHUB_ALLOW_IDLE_WORKER", raising=False)
-    monkeypatch.delenv("REVIO_ENVIRONMENT", raising=False)
-    monkeypatch.delenv("REVIO_GITHUB_WEBHOOK_MODE", raising=False)
-    monkeypatch.delenv("REVIO_GITHUB_WEBHOOK_SECRET", raising=False)
-    monkeypatch.delenv("REVIO_REVIEW_ENABLED", raising=False)
-    monkeypatch.delenv("REVIO_REVIEW_PUBLISH_ENABLED", raising=False)
-    monkeypatch.delenv("REVIO_PUBLISH_MARKER_KEY", raising=False)
-    monkeypatch.delenv("REVIO_ANTHROPIC_ENABLED", raising=False)
-    monkeypatch.delenv("REVIO_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("VENAROQ_DATABASE_PATH", str(path))
+    monkeypatch.delenv("VENAROQ_GITHUB_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("VENAROQ_GITHUB_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.delenv("VENAROQ_GITHUB_APP_ID", raising=False)
+    monkeypatch.delenv("VENAROQ_GITHUB_ENABLED", raising=False)
+    monkeypatch.delenv("VENAROQ_GITHUB_ALLOW_IDLE_WORKER", raising=False)
+    monkeypatch.delenv("VENAROQ_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("VENAROQ_GITHUB_WEBHOOK_MODE", raising=False)
+    monkeypatch.delenv("VENAROQ_GITHUB_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("VENAROQ_REVIEW_ENABLED", raising=False)
+    monkeypatch.delenv("VENAROQ_REVIEW_PUBLISH_ENABLED", raising=False)
+    monkeypatch.delenv("VENAROQ_PUBLISH_MARKER_KEY", raising=False)
+    monkeypatch.delenv("VENAROQ_ANTHROPIC_ENABLED", raising=False)
+    monkeypatch.delenv("VENAROQ_ANTHROPIC_API_KEY", raising=False)
 
 
 @pytest.mark.asyncio
@@ -44,18 +44,18 @@ async def test_worker_readiness_rejects_incomplete_github_configuration(
     rsa_private_key_pem: str,
     case: str,
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     await _database(path)
     _configure_database(monkeypatch, path)
-    monkeypatch.setenv("REVIO_GITHUB_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_GITHUB_ENABLED", "true")
     if case != "missing_app_id":
-        monkeypatch.setenv("REVIO_GITHUB_APP_ID", "1")
+        monkeypatch.setenv("VENAROQ_GITHUB_APP_ID", "1")
     if case != "missing_key":
-        monkeypatch.setenv("REVIO_GITHUB_PRIVATE_KEY", rsa_private_key_pem)
+        monkeypatch.setenv("VENAROQ_GITHUB_PRIVATE_KEY", rsa_private_key_pem)
     if case == "two_keys":
         key_path = tmp_path / "private.pem"
         key_path.write_text(rsa_private_key_pem)
-        monkeypatch.setenv("REVIO_GITHUB_PRIVATE_KEY_FILE", str(key_path))
+        monkeypatch.setenv("VENAROQ_GITHUB_PRIVATE_KEY_FILE", str(key_path))
     with pytest.raises(ValidationError):
         await run_worker(True)
 
@@ -65,11 +65,11 @@ async def test_worker_readiness_rejects_incomplete_github_configuration(
 async def test_worker_readiness_rejects_invalid_key_material(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key_kind: str
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     await _database(path)
     _configure_database(monkeypatch, path)
-    monkeypatch.setenv("REVIO_GITHUB_ENABLED", "true")
-    monkeypatch.setenv("REVIO_GITHUB_APP_ID", "1")
+    monkeypatch.setenv("VENAROQ_GITHUB_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_GITHUB_APP_ID", "1")
     if key_kind == "invalid":
         value = "not a private key"
     else:
@@ -79,7 +79,7 @@ async def test_worker_readiness_rejects_invalid_key_material(
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
         ).decode()
-    monkeypatch.setenv("REVIO_GITHUB_PRIVATE_KEY", value)
+    monkeypatch.setenv("VENAROQ_GITHUB_PRIVATE_KEY", value)
     with pytest.raises(Exception, match="GitHub private key"):
         await run_worker(True)
 
@@ -90,12 +90,12 @@ async def test_valid_worker_readiness_is_network_free_and_does_not_lease(
     monkeypatch: pytest.MonkeyPatch,
     rsa_private_key_pem: str,
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     await _database(path)
     _configure_database(monkeypatch, path)
-    monkeypatch.setenv("REVIO_GITHUB_ENABLED", "true")
-    monkeypatch.setenv("REVIO_GITHUB_APP_ID", "1")
-    monkeypatch.setenv("REVIO_GITHUB_PRIVATE_KEY", rsa_private_key_pem)
+    monkeypatch.setenv("VENAROQ_GITHUB_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_GITHUB_APP_ID", "1")
+    monkeypatch.setenv("VENAROQ_GITHUB_PRIVATE_KEY", rsa_private_key_pem)
 
     async def forbidden(*args: object, **kwargs: object) -> None:
         raise AssertionError("readiness must not perform network or lease operations")
@@ -111,18 +111,18 @@ async def test_no_secret_phase4_sandbox_composition_is_network_free(
     monkeypatch: pytest.MonkeyPatch,
     rsa_private_key_pem: str,
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     await _database(path)
     _configure_database(monkeypatch, path)
-    monkeypatch.setenv("REVIO_ENVIRONMENT", "sandbox")
-    monkeypatch.setenv("REVIO_GITHUB_ENABLED", "true")
-    monkeypatch.setenv("REVIO_GITHUB_APP_ID", "1")
-    monkeypatch.setenv("REVIO_GITHUB_PRIVATE_KEY", rsa_private_key_pem)
-    monkeypatch.setenv("REVIO_REVIEW_ENABLED", "true")
-    monkeypatch.setenv("REVIO_REVIEW_PUBLISH_ENABLED", "true")
-    monkeypatch.setenv("REVIO_PUBLISH_MARKER_KEY", "m" * 32)
-    monkeypatch.setenv("REVIO_ANTHROPIC_ENABLED", "true")
-    monkeypatch.setenv("REVIO_ANTHROPIC_API_KEY", "test-only-not-a-real-secret")
+    monkeypatch.setenv("VENAROQ_ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("VENAROQ_GITHUB_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_GITHUB_APP_ID", "1")
+    monkeypatch.setenv("VENAROQ_GITHUB_PRIVATE_KEY", rsa_private_key_pem)
+    monkeypatch.setenv("VENAROQ_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_REVIEW_PUBLISH_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_PUBLISH_MARKER_KEY", "m" * 32)
+    monkeypatch.setenv("VENAROQ_ANTHROPIC_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_ANTHROPIC_API_KEY", "test-only-not-a-real-secret")
 
     async def forbidden(*args: object, **kwargs: object) -> None:
         raise AssertionError("composition readiness must remain network-free")
@@ -135,7 +135,7 @@ async def test_no_secret_phase4_sandbox_composition_is_network_free(
 async def test_disabled_worker_is_unready_without_explicit_local_idle_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     await _database(path)
     _configure_database(monkeypatch, path)
     with pytest.raises(ValueError, match="enabled provider"):
@@ -146,10 +146,10 @@ async def test_disabled_worker_is_unready_without_explicit_local_idle_mode(
 async def test_explicit_local_idle_worker_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     await _database(path)
     _configure_database(monkeypatch, path)
-    monkeypatch.setenv("REVIO_GITHUB_ALLOW_IDLE_WORKER", "true")
+    monkeypatch.setenv("VENAROQ_GITHUB_ALLOW_IDLE_WORKER", "true")
     assert await run_worker(True) == 0
 
 
@@ -158,14 +158,14 @@ async def test_explicit_local_idle_worker_configuration(
 async def test_disabled_worker_is_unready_in_operational_modes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     await _database(path)
     _configure_database(monkeypatch, path)
     if mode == "production":
-        monkeypatch.setenv("REVIO_ENVIRONMENT", "production")
+        monkeypatch.setenv("VENAROQ_ENVIRONMENT", "production")
     else:
-        monkeypatch.setenv("REVIO_GITHUB_WEBHOOK_MODE", "durable")
-        monkeypatch.setenv("REVIO_GITHUB_WEBHOOK_SECRET", "secret")
+        monkeypatch.setenv("VENAROQ_GITHUB_WEBHOOK_MODE", "durable")
+        monkeypatch.setenv("VENAROQ_GITHUB_WEBHOOK_SECRET", "secret")
     with pytest.raises((ValidationError, ValueError)):
         await run_worker(True)
 
@@ -174,13 +174,13 @@ async def test_disabled_worker_is_unready_in_operational_modes(
 async def test_worker_runtime_rejects_production_review_publishing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     await _database(path)
     _configure_database(monkeypatch, path)
-    monkeypatch.setenv("REVIO_ENVIRONMENT", "production")
-    monkeypatch.setenv("REVIO_REVIEW_ENABLED", "true")
-    monkeypatch.setenv("REVIO_REVIEW_PUBLISH_ENABLED", "true")
-    monkeypatch.setenv("REVIO_PUBLISH_MARKER_KEY", "x" * 32)
+    monkeypatch.setenv("VENAROQ_ENVIRONMENT", "production")
+    monkeypatch.setenv("VENAROQ_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_REVIEW_PUBLISH_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_PUBLISH_MARKER_KEY", "x" * 32)
     with pytest.raises(ValidationError, match="production publishing requires"):
         await run_worker(True)
 
@@ -189,12 +189,12 @@ async def test_worker_runtime_rejects_production_review_publishing(
 async def test_worker_readiness_rejects_oversized_direct_private_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     await _database(path)
     _configure_database(monkeypatch, path)
-    monkeypatch.setenv("REVIO_GITHUB_ENABLED", "true")
-    monkeypatch.setenv("REVIO_GITHUB_APP_ID", "1")
-    monkeypatch.setenv("REVIO_GITHUB_PRIVATE_KEY", "x" * (64 * 1024 + 1))
+    monkeypatch.setenv("VENAROQ_GITHUB_ENABLED", "true")
+    monkeypatch.setenv("VENAROQ_GITHUB_APP_ID", "1")
+    monkeypatch.setenv("VENAROQ_GITHUB_PRIVATE_KEY", "x" * (64 * 1024 + 1))
     with pytest.raises(GitHubConfigurationError, match="too large"):
         await run_worker(True)
 
@@ -202,9 +202,9 @@ async def test_worker_readiness_rejects_oversized_direct_private_key(
 def test_worker_cli_reports_generic_invalid_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _configure_database(monkeypatch, tmp_path / "revio.db")
-    monkeypatch.setenv("REVIO_GITHUB_ENABLED", "true")
-    monkeypatch.setattr(sys, "argv", ["revio-worker", "check-ready"])
+    _configure_database(monkeypatch, tmp_path / "venaroq.db")
+    monkeypatch.setenv("VENAROQ_GITHUB_ENABLED", "true")
+    monkeypatch.setattr(sys, "argv", ["venaroq-worker", "check-ready"])
     with pytest.raises(SystemExit) as caught:
         main()
     assert caught.value.code == 1

@@ -2,13 +2,13 @@
 
 Phase 4 publication is a sandbox demonstration and must not be enabled in production.
 
-1. Apply migrations with `revio-db upgrade`, then run `revio-db current` and
-   `revio-worker check-ready`.
+1. Apply migrations with `venaroq-db upgrade`, then run `venaroq-db current` and
+   `venaroq-worker check-ready`.
 2. Configure a sandbox GitHub App with pull-request and checks write permission, Anthropic through a
    secret file, and a 32-byte-or-longer publication marker key through a secret file.
-3. Validate execution-only mode with `REVIO_REVIEW_ENABLED=true` and publishing false. Confirm an
+3. Validate execution-only mode with `VENAROQ_REVIEW_ENABLED=true` and publishing false. Confirm an
    artifact and usage disposition are durable and no GitHub write occurs.
-4. In `REVIO_ENVIRONMENT=sandbox`, enable publishing. Review a synthetic flawed pull request and
+4. In `VENAROQ_ENVIRONMENT=sandbox`, enable publishing. Review a synthetic flawed pull request and
    verify one Check Run ID and one marked `COMMENT` review pinned to the validated head.
 5. Exercise incomplete input, anchor rejection, a changed head, and old-head neutral supersession.
 6. Crash at every initial and repair ProviderCall boundary. A possibly transmitted call must never be

@@ -2,8 +2,8 @@
 
 import math
 
-from revio.application.queue.retry import retry_delay
-from revio.config.queue import QueueSettings
+from venaroq.application.queue.retry import retry_delay
+from venaroq.config.queue import QueueSettings
 
 
 def test_retry_delay_applies_jitter_cap_and_bounded_retry_after() -> None:

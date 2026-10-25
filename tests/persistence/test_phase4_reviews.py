@@ -5,10 +5,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from revio.adapters.ai.anthropic import anthropic_model_profile
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.review.execution import build_artifact
-from revio.domain.reviews import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.ai.anthropic import anthropic_model_profile
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.application.review.execution import build_artifact
+from venaroq.domain.reviews import (
     PartialReason,
     ProviderCallIdentity,
     ProviderCallState,
@@ -16,8 +17,7 @@ from revio.domain.reviews import (
     UsageDisposition,
     WriteOperationState,
 )
-from revio.errors import PersistenceIntegrityError
-from tests.conftest import AlembicDatabase
+from venaroq.errors import PersistenceIntegrityError
 
 
 async def _job(store: SQLiteStore, now: datetime) -> None:
@@ -113,7 +113,7 @@ async def test_write_attempt_state_and_marker_key_readiness(
         run_id="run",
         head_sha="head",
         operation_key="operation-key",
-        marker="<!-- revio:v1:review:abcdefghijklmnopqrstuvwx -->",
+        marker="<!-- venaroq:v1:review:abcdefghijklmnopqrstuvwx -->",
         marker_key_id="marker-key-id",
         now=now,
     )

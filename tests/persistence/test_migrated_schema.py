@@ -9,14 +9,14 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
-from revio.adapters.persistence.sqlite import capabilities
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
-from revio.config.database import DatabaseSettings
+from venaroq.adapters.persistence.sqlite import capabilities
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.adapters.scm.github.webhook.normalizer import normalize_webhook
+from venaroq.config.database import DatabaseSettings
 
 
 def _upgrade(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("REVIO_DATABASE_PATH", str(path))
+    monkeypatch.setenv("VENAROQ_DATABASE_PATH", str(path))
     command.upgrade(Config("alembic.ini"), "head")
 
 
@@ -79,7 +79,7 @@ async def test_repository_operates_on_alembic_schema_and_matches_test_schema(
 async def test_complete_revision_set_and_verified_pragmas(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     _upgrade(path, monkeypatch)
     store = SQLiteStore(DatabaseSettings(database_path=path))
     async with store.connect() as connection:
@@ -98,7 +98,7 @@ async def test_complete_revision_set_and_verified_pragmas(
 async def test_read_only_database_is_not_ready(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     _upgrade(path, monkeypatch)
     store = SQLiteStore(DatabaseSettings(database_path=path))
     path.chmod(0o400)
@@ -116,7 +116,7 @@ def test_minimum_sqlite_capability_and_destructive_downgrade_refusal(
         SQLiteStore(DatabaseSettings(database_path=tmp_path / "old.db"))
     monkeypatch.undo()
 
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     _upgrade(path, monkeypatch)
     with pytest.raises(RuntimeError, match="downgrade is unsupported"):
         command.downgrade(Config("alembic.ini"), "base")
@@ -126,7 +126,7 @@ def test_minimum_sqlite_capability_and_destructive_downgrade_refusal(
 async def test_attempt_bounds_and_attempt_completion_constraints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / "revio.db"
+    path = tmp_path / "venaroq.db"
     _upgrade(path, monkeypatch)
     store = SQLiteStore(DatabaseSettings(database_path=path))
     now = datetime.now(UTC).isoformat()

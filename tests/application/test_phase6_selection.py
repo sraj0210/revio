@@ -4,36 +4,36 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.application.review.lifecycle import (
+from tests.conftest import AlembicDatabase
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.application.review.lifecycle import (
     AGGREGATE_BYTE_LIMIT,
     PER_FILE_BYTE_LIMIT,
     SELECTION_LIMIT,
     FindingLifecycleService,
     rank_candidates,
 )
-from revio.domain.configuration import EffectiveReviewPolicy
-from revio.domain.identifiers import (
+from venaroq.domain.configuration import EffectiveReviewPolicy
+from venaroq.domain.identifiers import (
     ChangeRequestTarget,
     InstallationRef,
     ProviderId,
     RepositoryRef,
 )
-from revio.domain.lifecycle import (
+from venaroq.domain.lifecycle import (
     FindingLifecycleState,
     FindingRecord,
     OccurrenceDisposition,
     RevalidationOutcome,
 )
-from revio.domain.models import (
+from venaroq.domain.models import (
     ChangeRequest,
     DiffCollection,
     DiffFile,
     DiffLine,
     TreeCollection,
 )
-from revio.errors import ProviderTransientError
-from tests.conftest import AlembicDatabase
+from venaroq.errors import ProviderTransientError
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 DIGEST = "a" * 64
@@ -220,7 +220,7 @@ async def test_excluded_path_is_unselected_policy_excluded(
     await _run(store, "run", "job")
     await store.findings.upsert_finding(_record(1, path="vendor/lib.py"), NOW)
     policy = EffectiveReviewPolicy(
-        summary_confidence=0.6, inline_confidence=0.8, exclusions=(".revio.yml", "vendor/**")
+        summary_confidence=0.6, inline_confidence=0.8, exclusions=(".venaroq.yml", "vendor/**")
     )
     service = FindingLifecycleService(
         store.findings, _FakeReader(_change_request()), _FakeContent({})

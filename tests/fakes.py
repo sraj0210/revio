@@ -2,8 +2,14 @@
 
 from dataclasses import dataclass, field
 
-from revio.domain.identifiers import ChangeRequestTarget
-from revio.domain.models import ChangeRequest, DiffCollection, DiffFile, ReviewRequest, ReviewResult
+from venaroq.domain.identifiers import ChangeRequestTarget
+from venaroq.domain.models import (
+    ChangeRequest,
+    DiffCollection,
+    DiffFile,
+    ReviewRequest,
+    ReviewResult,
+)
 
 
 @dataclass

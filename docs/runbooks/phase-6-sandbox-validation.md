@@ -1,30 +1,30 @@
 # Phase 6 sandbox validation — deduplication and finding lifecycle
 
-Use only `sraj0210/revio-phase4-sandbox` and the dedicated **Revio Phase 4 Sandbox** GitHub App
+Use only `sraj0210/venaroq-phase4-sandbox` and the dedicated **Venaroq Phase 4 Sandbox** GitHub App
 (App ID `5450619`, installation `174693302`, repository `1328857147`, stable identity
 `github:174693302:1328857147`). Never use a production repository and never enable production
 publishing.
 
 ## Prerequisites
 
-- Secret files under `~/.config/revio/`: `github-app.pem`, `github-webhook-secret`,
+- Secret files under `~/.config/venaroq/`: `github-app.pem`, `github-webhook-secret`,
   `anthropic-api-key`, `publish-marker.key`.
 - GitHub App permissions: pull requests read/write, checks read/write, contents read. Phase 6 adds
   no new REST permission; review-thread discovery and resolution use GraphQL with the same
   installation token.
 - An isolated Compose project and a disposable volume. Apply migrations through
-  `revio-db upgrade`; confirm `revio-db current` reports `0004_phase6_finding_lifecycle` and
-  `revio-db check` passes.
+  `venaroq-db upgrade`; confirm `venaroq-db current` reports `0004_phase6_finding_lifecycle` and
+  `venaroq-db check` passes.
 - Start a fresh tunnel to local port 8000 and update the dedicated App webhook URL through the
   GitHub App API, preserving the existing webhook secret.
 
 ## Environment
 
 ```text
-REVIO_ENVIRONMENT=sandbox
-REVIO_REVIEW_ENABLED=true
-REVIO_REVIEW_PUBLISH_ENABLED=true
-REVIO_REVIEW_ROLLOUT_REPOSITORIES=github:174693302:1328857147
+VENAROQ_ENVIRONMENT=sandbox
+VENAROQ_REVIEW_ENABLED=true
+VENAROQ_REVIEW_PUBLISH_ENABLED=true
+VENAROQ_REVIEW_ROLLOUT_REPOSITORIES=github:174693302:1328857147
 ```
 
 Publishing enabled in `sandbox` activates the full lifecycle; the same configuration must fail
@@ -64,11 +64,11 @@ startup in `production`.
 Confirmed-closed finding history is pruned offline under the exclusive maintenance lock:
 
 ```text
-revio-db prune-findings --dry-run
-revio-db prune-findings --execute --backup-confirmed
+venaroq-db prune-findings --dry-run
+venaroq-db prune-findings --execute --backup-confirmed
 ```
 
-Default eligibility is 180 days after resolution (`REVIO_RETENTION_CLOSED_FINDING_AGE_DAYS`). Open
+Default eligibility is 180 days after resolution (`VENAROQ_RETENTION_CLOSED_FINDING_AGE_DAYS`). Open
 and resolution-indeterminate findings and unresolved operations are never deleted.
 
 ## Teardown

@@ -5,10 +5,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.domain.configuration import ConfigurationResolution, resolve_policy
-from revio.errors import PersistenceIntegrityError
 from tests.conftest import AlembicDatabase
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.domain.configuration import ConfigurationResolution, resolve_policy
+from venaroq.errors import PersistenceIntegrityError
 
 
 async def _job(store: SQLiteStore, now: datetime) -> None:

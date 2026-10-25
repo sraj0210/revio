@@ -5,11 +5,11 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from revio.adapters.persistence.sqlite.connection import (
+from venaroq.adapters.persistence.sqlite.connection import (
     apply_sync_connection_policy,
     prepare_database_file,
 )
-from revio.config.database import DatabaseSettings
+from venaroq.config.database import DatabaseSettings
 
 config = context.config
 if config.config_file_name is not None:

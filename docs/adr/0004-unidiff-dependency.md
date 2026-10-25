@@ -5,7 +5,7 @@
 
 ## Context
 
-Phase 2 needs conservative unified-diff parsing without maintaining a custom parser. `unidiff` 0.7.5 is MIT-licensed and compatible with Revio's Apache-2.0 license, but its latest PyPI release dates to March 2023.
+Phase 2 needs conservative unified-diff parsing without maintaining a custom parser. `unidiff` 0.7.5 is MIT-licensed and compatible with Venaroq's Apache-2.0 license, but its latest PyPI release dates to March 2023.
 
 ## Decision
 

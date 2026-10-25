@@ -27,11 +27,11 @@ item 21 (production TLS, secret manager, logs, backups, retention, privacy polic
 ### Decision 1 — Production publishing enablement
 
 Proposed: the current unconditional production prohibition is replaced by an explicit, fail-closed
-gate. In `production`, `REVIO_REVIEW_PUBLISH_ENABLED=true` is accepted only when **all** of the
+gate. In `production`, `VENAROQ_REVIEW_PUBLISH_ENABLED=true` is accepted only when **all** of the
 following hold, otherwise startup fails:
 
-- `REVIO_PRODUCTION_PUBLISH_CONFIRMED=true` (a dedicated, non-defaulted acknowledgement);
-- a non-empty rollout allow-list (`REVIO_REVIEW_ROLLOUT_REPOSITORIES`);
+- `VENAROQ_PRODUCTION_PUBLISH_CONFIRMED=true` (a dedicated, non-defaulted acknowledgement);
+- a non-empty rollout allow-list (`VENAROQ_REVIEW_ROLLOUT_REPOSITORIES`);
 - a valid marker-key source and GitHub publish/checks write capabilities;
 - TLS and secret-source policy (Decisions 2–3) satisfied;
 - observability required-configuration (Decision 4) satisfied.
@@ -42,7 +42,7 @@ environments are unaffected.
 ### Decision 2 — TLS and ingress exposure
 
 Proposed: TLS is terminated by an operator-provided reverse proxy (documented), not in-process.
-Revio binds loopback/private only; the webhook route additionally enforces the existing
+Venaroq binds loopback/private only; the webhook route additionally enforces the existing
 signature/byte/media-type limits. `/metrics` is never exposed publicly (Decision 4).
 
 ### Decision 3 — Secret sources
@@ -54,13 +54,13 @@ credential storage is introduced; tokens remain in-memory as today.
 ### Decision 4 — Metrics endpoint and protection
 
 Proposed: a Prometheus text `/metrics` endpoint served only on a separate internal bind
-(`REVIO_METRICS_BIND`, default disabled) or gated behind a required bearer token
-(`REVIO_METRICS_TOKEN`), never on the public webhook listener. Metrics stay low cardinality
+(`VENAROQ_METRICS_BIND`, default disabled) or gated behind a required bearer token
+(`VENAROQ_METRICS_TOKEN`), never on the public webhook listener. Metrics stay low cardinality
 (Decision 5).
 
 ### Decision 5 — Log destination and format
 
-Proposed: single-line JSON logs to stdout at `REVIO_LOG_LEVEL` (default `info`). Operators ship
+Proposed: single-line JSON logs to stdout at `VENAROQ_LOG_LEVEL` (default `info`). Operators ship
 stdout. No log files are written by the process.
 
 ### Decision 6 — Rate-limit and resource defaults
@@ -173,10 +173,10 @@ history and Phase 6 closed-finding pruning); no automatic online deletion is add
 
 ## 12. Configuration additions
 
-Add fail-closed settings under the `REVIO_` prefix, e.g.:
-`REVIO_LOG_LEVEL`, `REVIO_LOG_FORMAT=json`, `REVIO_METRICS_BIND`, `REVIO_METRICS_TOKEN`,
-`REVIO_INGRESS_RATE_LIMIT`, `REVIO_PROVIDER_MAX_CONCURRENCY`, `REVIO_MAX_INFLIGHT_REVIEWS`,
-`REVIO_PRODUCTION_PUBLISH_CONFIRMED`. Every combination is covered by configuration tests, including
+Add fail-closed settings under the `VENAROQ_` prefix, e.g.:
+`VENAROQ_LOG_LEVEL`, `VENAROQ_LOG_FORMAT=json`, `VENAROQ_METRICS_BIND`, `VENAROQ_METRICS_TOKEN`,
+`VENAROQ_INGRESS_RATE_LIMIT`, `VENAROQ_PROVIDER_MAX_CONCURRENCY`, `VENAROQ_MAX_INFLIGHT_REVIEWS`,
+`VENAROQ_PRODUCTION_PUBLISH_CONFIRMED`. Every combination is covered by configuration tests, including
 all production gate permutations.
 
 ## 13. Test plan
@@ -198,7 +198,7 @@ all production gate permutations.
 
 ## 14. Manual / sandbox validation (operability drill)
 
-Use only `sraj0210/revio-phase4-sandbox` and the dedicated App. With a fresh tunnel and isolated
+Use only `sraj0210/venaroq-phase4-sandbox` and the dedicated App. With a fresh tunnel and isolated
 Compose project:
 
 1. Enable JSON logging and `/metrics`; confirm logs carry correlation/outcome fields and no secrets.

@@ -32,7 +32,7 @@ selection; latest-head file retrieval; three-state revalidation; and ambiguity-s
    oversized, truncated, renamed-without-proof, or ambiguous findings remain open.
 6. Exact primary-fingerprint matches are duplicates and are not reposted. Secondary fingerprints never
    suppress or resolve by themselves; they may only rank candidates for bounded revalidation.
-7. When a completed review has no new publishable findings after exact deduplication, Revio completes
+7. When a completed review has no new publishable findings after exact deduplication, Venaroq completes
    the existing Check Run successfully with a deterministic service-owned summary and does not create a
    pull-request review.
 8. An unchanged normalized diff hash may skip new generation only when the same repository, pull
@@ -143,7 +143,7 @@ suppression, linkage, or resolution.
 ### 5.3 Rename behavior
 
 A path change produces a different primary fingerprint. Phase 6 does not infer rename equivalence from
-the provider diff alone. A previous finding on a renamed path may be selected, but it remains
+the provider diff alone. A pvenaroqus finding on a renamed path may be selected, but it remains
 `uncertain` unless revalidation explicitly identifies the exact current path and evidence. No record is
 silently moved or closed.
 
@@ -485,7 +485,7 @@ Deletion of GitHub comments or reviews is not implemented.
 
 ## 18. Manual sandbox validation
 
-Use only `sraj0210/revio-phase4-sandbox` and the dedicated GitHub App.
+Use only `sraj0210/venaroq-phase4-sandbox` and the dedicated GitHub App.
 
 1. Create a synthetic PR that produces one inline lifecycle-capable finding; record its fingerprint,
    marker, review ID, thread ID, and open state without exposing evidence content.

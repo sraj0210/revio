@@ -8,8 +8,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
-from revio.api.app import create_app
-from revio.config.github import GitHubSettings
+from venaroq.api.app import create_app
+from venaroq.config.github import GitHubSettings
 
 
 def settings(pem: str, *, enabled: bool = True, limit: int = 1_048_576) -> GitHubSettings:
@@ -65,7 +65,7 @@ async def test_accepts_utf8_json_media_types(rsa_private_key_pem: str, content_t
 
 @pytest.mark.asyncio
 async def test_ingress_rate_limit_sheds_excess_requests(rsa_private_key_pem: str) -> None:
-    from revio.api.ratelimit import FixedWindowRateLimiter
+    from venaroq.api.ratelimit import FixedWindowRateLimiter
 
     body = json.dumps(pull_payload()).encode()
     app = create_app(settings(rsa_private_key_pem))

@@ -5,12 +5,12 @@ from typing import cast
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.scm.github.adapter import GitHubReadAdapter
-from revio.adapters.scm.github.client import GitHubClient
-from revio.adapters.scm.github.composition import compose_github
-from revio.adapters.scm.github.factory import github_adapter_bundle
-from revio.config.github import GitHubSettings
 from tests.github.test_adapter import FakeClient
+from venaroq.adapters.scm.github.adapter import GitHubReadAdapter
+from venaroq.adapters.scm.github.client import GitHubClient
+from venaroq.adapters.scm.github.composition import compose_github
+from venaroq.adapters.scm.github.factory import github_adapter_bundle
+from venaroq.config.github import GitHubSettings
 
 
 def test_bundle_declares_only_phase_2_capabilities() -> None:

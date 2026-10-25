@@ -3,8 +3,8 @@
 import json
 import logging
 
-from revio.adapters.observability.logging import JsonLogFormatter, configure_logging, scrub
-from revio.config.observability import ObservabilitySettings
+from venaroq.adapters.observability.logging import JsonLogFormatter, configure_logging, scrub
+from venaroq.config.observability import ObservabilitySettings
 
 
 def test_scrub_redacts_common_secret_shapes() -> None:
@@ -24,7 +24,7 @@ def test_scrub_redacts_common_secret_shapes() -> None:
 def test_json_formatter_emits_allowlisted_context() -> None:
     formatter = JsonLogFormatter()
     record = logging.LogRecord(
-        name="revio.test",
+        name="venaroq.test",
         level=logging.INFO,
         pathname=__file__,
         lineno=1,
@@ -52,7 +52,7 @@ def test_json_formatter_scrubs_message_and_exception_class() -> None:
         import sys
 
         record = logging.LogRecord(
-            name="revio.test",
+            name="venaroq.test",
             level=logging.ERROR,
             pathname=__file__,
             lineno=1,

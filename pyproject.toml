@@ -3,13 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "revio"
+name = "venaroq"
 version = "0.1.0"
 description = "Provider-neutral AI-powered code review"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { file = "LICENSE" }
-authors = [{ name = "Revio contributors" }]
+authors = [{ name = "Venaroq contributors" }]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Framework :: FastAPI",
@@ -41,7 +41,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/revio"]
+packages = ["src/venaroq"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
@@ -70,7 +70,7 @@ venv = ".venv"
 default-groups = ["dev"]
 
 [project.scripts]
-revio-github-sandbox = "revio.cli.github_sandbox:main"
-revio-db = "revio.cli.database:main"
-revio-worker = "revio.worker.main:main"
-revio-queue-status = "revio.cli.queue_status:main"
+venaroq-github-sandbox = "venaroq.cli.github_sandbox:main"
+venaroq-db = "venaroq.cli.database:main"
+venaroq-worker = "venaroq.worker.main:main"
+venaroq-queue-status = "venaroq.cli.queue_status:main"

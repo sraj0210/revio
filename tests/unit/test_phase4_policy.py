@@ -6,16 +6,16 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from revio.adapters.ai.anthropic import anthropic_model_profile
-from revio.application.review.execution import (
+from venaroq.adapters.ai.anthropic import anthropic_model_profile
+from venaroq.application.review.execution import (
     CONTENT_LIMIT_SUMMARY,
     LONG_VERBATIM_SOURCE_THRESHOLD,
     DiffLimiter,
     build_artifact,
 )
-from revio.application.review.markers import marker_key_id, marker_matches, review_marker
-from revio.config.review import ReviewSettings
-from revio.domain.models import (
+from venaroq.application.review.markers import marker_key_id, marker_matches, review_marker
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.models import (
     CollectionCompleteness,
     DiffCollection,
     DiffFile,
@@ -23,9 +23,9 @@ from revio.domain.models import (
     Finding,
     TokenUsage,
 )
-from revio.domain.reviews import PartialReason, UsageDisposition
-from revio.errors import UnknownModelAliasError
-from revio.worker.main import resolve_review_profile
+from venaroq.domain.reviews import PartialReason, UsageDisposition
+from venaroq.errors import UnknownModelAliasError
+from venaroq.worker.main import resolve_review_profile
 
 
 def test_sonnet_profile_is_deterministic() -> None:
@@ -60,9 +60,9 @@ def test_review_gates_and_admission_margin() -> None:
 
 def test_compose_propagates_explicit_environment_to_all_services() -> None:
     compose = (Path(__file__).parents[2] / "docker-compose.yml").read_text()
-    assert "REVIO_ENVIRONMENT: ${REVIO_ENVIRONMENT:-local}" in compose
-    assert "environment: &revio-environment" in compose
-    assert compose.count("environment: *revio-environment") == 2
+    assert "VENAROQ_ENVIRONMENT: ${VENAROQ_ENVIRONMENT:-local}" in compose
+    assert "environment: &venaroq-environment" in compose
+    assert compose.count("environment: *venaroq-environment") == 2
 
 
 def test_model_alias_resolution_is_administrator_controlled() -> None:

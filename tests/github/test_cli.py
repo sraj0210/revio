@@ -8,12 +8,12 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from revio.adapters.scm.github.adapter import GitHubReadAdapter
-from revio.adapters.scm.github.auth import GitHubAppJWT, InstallationTokenCache, load_private_key
-from revio.adapters.scm.github.client import GitHubClient
-from revio.cli import github_sandbox
-from revio.config.github import GitHubSettings
-from revio.domain.models import (
+from venaroq.adapters.scm.github.adapter import GitHubReadAdapter
+from venaroq.adapters.scm.github.auth import GitHubAppJWT, InstallationTokenCache, load_private_key
+from venaroq.adapters.scm.github.client import GitHubClient
+from venaroq.cli import github_sandbox
+from venaroq.config.github import GitHubSettings
+from venaroq.domain.models import (
     ChangeRequest,
     DiffCollection,
     DiffFile,

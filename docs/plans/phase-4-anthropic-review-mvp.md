@@ -23,7 +23,7 @@ AI provider, create a Check Run, or publish a review.
 
 ## 2. Objective
 
-Produce Revio's first end-to-end, non-blocking GitHub review from a durable queue job:
+Produce Venaroq's first end-to-end, non-blocking GitHub review from a durable queue job:
 
 ```text
 leased current-head job
@@ -56,11 +56,11 @@ Proposed:
 - Deterministic request profile: `thinking.type = disabled`
 - Do not send non-default `temperature`, `top_p`, or `top_k`
 - No automatic cross-model fallback after a provider call starts
-- If `REVIO_REVIEW_MODEL_ALIAS` is absent, resolve the administrator-controlled
-  `REVIO_REVIEW_FALLBACK_ALIAS`, defaulting to `review-default`
+- If `VENAROQ_REVIEW_MODEL_ALIAS` is absent, resolve the administrator-controlled
+  `VENAROQ_REVIEW_FALLBACK_ALIAS`, defaulting to `review-default`
 - Unknown aliases and profiles that do not support `diff_only` fail at startup
 
-Rationale: the stable Revio alias decouples policy from the provider model ID. A pinned provider ID
+Rationale: the stable Venaroq alias decouples policy from the provider model ID. A pinned provider ID
 makes behavior and evaluations reproducible. Runtime cross-model fallback can create a second billed
 call with different behavior after an ambiguous first outcome, so it remains out of scope.
 
@@ -71,7 +71,7 @@ and token counting are supported. Contract tests assert that the adapter honors 
 and does not send forbidden sampling fields. This keeps the configured `max_tokens` budget available
 for structured review output rather than adaptive-thinking tokens.
 
-The profile declares the provider's published limits, but Revio's smaller service ceilings in
+The profile declares the provider's published limits, but Venaroq's smaller service ceilings in
 Decision 2 govern every request.
 
 ### Decision 2 — Diff, file, and token ceilings
@@ -109,7 +109,7 @@ Rules:
 ### Decision 3 — Malformed-output repair
 
 Proposed: one bounded repair attempt, only when a successful first response is syntactically valid
-structured output but fails Revio's stricter local semantic validation.
+structured output but fails Venaroq's stricter local semantic validation.
 
 - Use Anthropic JSON structured output for both attempts.
 - Do not repair refusals, timeouts, authentication failures, rate limits, context errors, or
@@ -155,7 +155,7 @@ model did not see in full.
 Proposed format:
 
 ```html
-<!-- revio:v1:review:<marker> -->
+<!-- venaroq:v1:review:<marker> -->
 ```
 
 Where `<marker>` is Base64URL without padding, preserving original case, of the first 18 bytes of
@@ -164,7 +164,7 @@ request, commit, job, model, or user data.
 
 Rules:
 
-- Load `REVIO_PUBLISH_MARKER_KEY` from exactly one secret value or absolute secret-file source.
+- Load `VENAROQ_PUBLISH_MARKER_KEY` from exactly one secret value or absolute secret-file source.
 - Require at least 32 bytes after decoding/loading; never log the key or derived operation material.
 - Search only the target pull request's reviews, with bounded same-origin pagination.
 - Require an exact, case-sensitive marker match in a top-level review body and use constant-time
@@ -192,8 +192,8 @@ Rules:
 Proposed administrator-controlled defaults:
 
 ```text
-REVIO_REVIEW_ENABLED=false
-REVIO_REVIEW_PUBLISH_ENABLED=false
+VENAROQ_REVIEW_ENABLED=false
+VENAROQ_REVIEW_PUBLISH_ENABLED=false
 ```
 
 Provider enablement is independent from review execution. Allowed combinations:
@@ -236,7 +236,7 @@ write permissions. Configuration tests cover every environment and Boolean combi
 - Agent mode, tool use, source-tree exploration, or arbitrary file reads for AI context
 - A second AI provider or an OpenAI-compatible abstraction
 - Repository-selected providers, raw model IDs, credentials, endpoints, or prompts
-- `.revio.yml`, repository opt-out, organization policy, or rollout allow-lists
+- `.venaroq.yml`, repository opt-out, organization policy, or rollout allow-lists
 - Finding fingerprinting, prior-finding revalidation, thread replies, or thread resolution
 - Suggested changes, review requests, approvals, or change requests
 - PostgreSQL, Redis, multiple workers, an admin UI, or production rollout
@@ -324,16 +324,16 @@ blocks, usage, and error classification remain explicit and adapter-private.
 Configuration:
 
 ```text
-REVIO_ANTHROPIC_ENABLED=false
-REVIO_ANTHROPIC_API_KEY_FILE=
-# REVIO_ANTHROPIC_API_KEY=
-REVIO_ANTHROPIC_API_URL=https://api.anthropic.com
-REVIO_ANTHROPIC_API_VERSION=2023-06-01
-REVIO_ANTHROPIC_HTTP_TIMEOUT_SECONDS=60
-REVIO_REVIEW_MODEL_ALIAS=review-default
-REVIO_REVIEW_FALLBACK_ALIAS=review-default
-REVIO_REVIEW_ENABLED=false
-REVIO_REVIEW_PUBLISH_ENABLED=false
+VENAROQ_ANTHROPIC_ENABLED=false
+VENAROQ_ANTHROPIC_API_KEY_FILE=
+# VENAROQ_ANTHROPIC_API_KEY=
+VENAROQ_ANTHROPIC_API_URL=https://api.anthropic.com
+VENAROQ_ANTHROPIC_API_VERSION=2023-06-01
+VENAROQ_ANTHROPIC_HTTP_TIMEOUT_SECONDS=60
+VENAROQ_REVIEW_MODEL_ALIAS=review-default
+VENAROQ_REVIEW_FALLBACK_ALIAS=review-default
+VENAROQ_REVIEW_ENABLED=false
+VENAROQ_REVIEW_PUBLISH_ENABLED=false
 ```
 
 Only `https://api.anthropic.com` is accepted in Phase 4. The adapter:
@@ -386,7 +386,7 @@ choice prefers a missed review over a possible duplicate billed generation.
 
 On restart, `reserved` may safely proceed to `attempt_started`; `attempt_started` without
 `response_observed` becomes ambiguous. Neither an ambiguous initial call nor an ambiguous repair call
-may send another equivalent Messages request. No usage is fabricated. Instead, Revio persists the
+may send another equivalent Messages request. No usage is fabricated. Instead, Venaroq persists the
 approved deterministic partial/neutral artifact.
 
 `response_observed` records response disposition and usage, not raw response content. If the process
@@ -425,7 +425,7 @@ Prompt rules:
 - Prefer no finding over a low-confidence or unanchorable finding.
 
 The JSON schema is intentionally small and marks fields required where practical to reduce grammar
-complexity. Revio still applies Pydantic/domain validation because structured output does not cover
+complexity. Venaroq still applies Pydantic/domain validation because structured output does not cover
 all semantic limits and exceptional stop reasons can bypass the schema.
 
 ## 9. Confidence and anchor routing
@@ -516,7 +516,7 @@ Persistence invariants:
 - Provider-neutral reconciliation results persist or return at least `match_count`,
   `collection_complete`, `pages_inspected`, `items_inspected`, `provider_limit_reached`, and
   `service_limit_reached`.
-- A zero-match result is actionable only when `collection_complete=true`. Provider or Revio caps,
+- A zero-match result is actionable only when `collection_complete=true`. Provider or Venaroq caps,
   incomplete pagination, or any inability to prove enumeration completeness is indeterminate and
   never authorizes a POST.
 - Initial and repair calls have distinct immutable identities and independent monotonic state
@@ -539,12 +539,12 @@ Update required GitHub App permissions separately from the Phase 2 read-only set
 
 Check Runs:
 
-- Use the fixed Check Run name `Revio review` and one stable, non-secret `external_id` derived from the
+- Use the fixed Check Run name `Venaroq review` and one stable, non-secret `external_id` derived from the
   review run and validated head SHA.
 - Treat `external_id` as an exact reconciliation identity, not a provider uniqueness constraint.
 - Reserve a durable `CheckRunOperation` before any create POST.
 - Before creating, list Check Runs for the exact validated head SHA using `filter=all`, bounded
-  same-origin pagination, and the authenticated Revio GitHub App ID. Filter locally by exact fixed
+  same-origin pagination, and the authenticated Venaroq GitHub App ID. Filter locally by exact fixed
   name and exact `external_id`.
 - Capture the provider-neutral reconciliation result, including match count, collection completeness,
   pages/items inspected, and provider/service-limit flags. A match on the last allowed page is valid
@@ -561,7 +561,7 @@ Check Runs:
 - For an ambiguous PATCH/update response, GET the persisted Check Run ID and compare its remote
   status, conclusion, head SHA, external ID, and intended safe summary with the intended transition.
   Reconcile when already applied; retry only when the remote state proves that retry is safe.
-- Findings never produce failure and Revio never submits an approving or change-requesting review.
+- Findings never produce failure and Venaroq never submits an approving or change-requesting review.
 
 Reviews:
 
@@ -647,7 +647,7 @@ Terminal or neutral:
 ## 13. Expected files
 
 ```text
-src/revio/
+src/venaroq/
 ├── adapters/
 │   ├── ai/anthropic/
 │   ├── persistence/sqlite/reviews.py
@@ -709,7 +709,7 @@ are mandatory.
 - Check Run create reconciliation, ID persistence, reuse, and conclusion mapping
 - Check Run zero/one/multiple matches by exact head, App ID, fixed name, and external ID with
   `filter=all` and bounded pagination
-- Complete zero-match collection, match on the last allowed page, provider collection cap, Revio
+- Complete zero-match collection, match on the last allowed page, provider collection cap, Venaroq
   pagination cap, and incomplete enumeration that never authorizes a POST
 - Check Run create timeout after remote success and ambiguous PATCH GET/compare reconciliation
 - Anchor conversion for added, modified, renamed, deleted, and context lines
@@ -795,7 +795,7 @@ are mandatory.
 14. Simulate ambiguous Check Run creation and confirm exact head/App/name/external-ID reconciliation
     discovers one Check Run ID, persists it, and reuses it. Also prove multiple matches fail closed.
 15. Exercise complete zero-match reconciliation before a first POST, a match on the last allowed
-    page, provider and Revio enumeration caps, and incomplete reconciliation after an ambiguous POST;
+    page, provider and Venaroq enumeration caps, and incomplete reconciliation after an ambiguous POST;
     confirm capped/incomplete or ambiguous-zero results never cause another POST.
 16. Simulate a lost Anthropic response and confirm the provider call transitions to `ambiguous`, its
     usage disposition is durably unknown, the result uses a deterministic partial/neutral artifact,

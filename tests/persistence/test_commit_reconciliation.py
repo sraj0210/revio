@@ -15,15 +15,15 @@ import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from pydantic import SecretStr
 
-from revio.adapters.observability import InMemoryQueueMetrics
-from revio.adapters.persistence.sqlite.connection import CoordinationHook, FailureHook
-from revio.adapters.persistence.sqlite.store import SQLiteStore
-from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
-from revio.api.app import create_app
-from revio.config.github import GitHubSettings
-from revio.config.queue import QueueSettings
-from revio.domain.queue import IngressDisposition
-from revio.errors import PersistenceIndeterminateError
+from venaroq.adapters.observability import InMemoryQueueMetrics
+from venaroq.adapters.persistence.sqlite.connection import CoordinationHook, FailureHook
+from venaroq.adapters.persistence.sqlite.store import SQLiteStore
+from venaroq.adapters.scm.github.webhook.normalizer import normalize_webhook
+from venaroq.api.app import create_app
+from venaroq.config.github import GitHubSettings
+from venaroq.config.queue import QueueSettings
+from venaroq.domain.queue import IngressDisposition
+from venaroq.errors import PersistenceIndeterminateError
 
 
 class MigratedDatabase(Protocol):

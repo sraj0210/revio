@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from revio.config.review import ReviewSettings
+from venaroq.config.review import ReviewSettings
 
 ROLLOUT = "github:1:2"
 

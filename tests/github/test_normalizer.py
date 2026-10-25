@@ -2,7 +2,7 @@
 
 import pytest
 
-from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
+from venaroq.adapters.scm.github.webhook.normalizer import normalize_webhook
 
 
 @pytest.mark.parametrize("action", ["opened", "reopened", "synchronize"])

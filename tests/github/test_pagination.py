@@ -5,9 +5,9 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from revio.adapters.scm.github.client import GitHubClient
-from revio.adapters.scm.github.errors import GitHubResponseError
-from revio.adapters.scm.github.pagination import collect_pages
+from venaroq.adapters.scm.github.client import GitHubClient
+from venaroq.adapters.scm.github.errors import GitHubResponseError
+from venaroq.adapters.scm.github.pagination import collect_pages
 
 
 class PagingClient:

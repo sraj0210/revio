@@ -1,7 +1,7 @@
 """Deterministic ``diff-hash-v1`` vectors and sensitivity checks."""
 
-from revio.domain.diff_hash import diff_hash_v1
-from revio.domain.models import DiffFile, DiffLine
+from venaroq.domain.diff_hash import diff_hash_v1
+from venaroq.domain.models import DiffFile, DiffLine
 
 GOLDEN = "a7568b08275d79395e63fa9834246041240547ee58a793aacba48f88848f11be"
 

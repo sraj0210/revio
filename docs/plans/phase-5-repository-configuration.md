@@ -10,8 +10,8 @@ belongs to Phase 7.
 
 ## 1. Goal
 
-Allow a repository to narrow Revio's administrator-approved review behavior through a strict,
-versioned `.revio.yml` loaded from the exact current pull request base commit.
+Allow a repository to narrow Venaroq's administrator-approved review behavior through a strict,
+versioned `.venaroq.yml` loaded from the exact current pull request base commit.
 
 Phase 5 also adds an administrator rollout allow-list and an explicit policy controlling whether a
 repository may opt out. Repository configuration never expands service capabilities or weakens
@@ -20,24 +20,24 @@ administrator security policy.
 ## 2. Frozen policy decisions
 
 1. Draft pull requests continue to be reviewed by default, preserving Phase 4 behavior. A future
-   administrator setting may disable draft review globally; `.revio.yml` cannot control it in v1.
+   administrator setting may disable draft review globally; `.venaroq.yml` cannot control it in v1.
 2. Rollout is denied unless the stable repository identity is present in the administrator allow-list.
 3. Repository opt-out is denied by default. `enabled: false` is honored only when the administrator
    explicitly permits repository opt-out.
-4. Missing `.revio.yml` uses secure service defaults without a warning.
+4. Missing `.venaroq.yml` uses secure service defaults without a warning.
 5. Invalid, oversized, unavailable, or malicious trusted-base configuration never suppresses an
-   otherwise allowed review. Revio uses secure defaults and publishes a bounded visible warning.
+   otherwise allowed review. Venaroq uses secure defaults and publishes a bounded visible warning.
 6. The warning is prepended to the review summary and Check Run summary. It does not create a
    standalone GitHub object. If the review is otherwise partial, the existing neutral conclusion is
    retained; configuration invalidity alone does not change a successful review to neutral.
-7. Repository configuration is read only from the exact current base SHA. A `.revio.yml` edit in a
+7. Repository configuration is read only from the exact current base SHA. A `.venaroq.yml` edit in a
    pull request cannot affect that same pull request.
 
 ## 3. Scope
 
 Phase 5 includes:
 
-- strict `.revio.yml` v1 schema;
+- strict `.venaroq.yml` v1 schema;
 - trusted-base file loading through the provider-neutral repository-content port;
 - deterministic parsing, validation, normalization, and merge policy;
 - durable normalized configuration resolution per durable queue job;
@@ -66,7 +66,7 @@ Phase 5 does not add:
 - an administrative UI;
 - Phase 6 functionality.
 
-## 5. `.revio.yml` v1 schema
+## 5. `.venaroq.yml` v1 schema
 
 The only accepted top-level schema is:
 
@@ -124,9 +124,9 @@ Exclusions apply only to normalized repository-relative POSIX paths in the alrea
 - Matching is case-sensitive; no platform filesystem semantics are consulted.
 - Repository exclusions are additive. They are unioned with administrator protected exclusions and
   can never re-include an administrator-excluded path.
-- `.revio.yml` is always protected and never sent as review content.
+- `.venaroq.yml` is always protected and never sent as review content.
 - A file excluded by effective policy is omitted before token counting and generation.
-- If all changed files are excluded, Revio publishes a deterministic no-review-needed summary and
+- If all changed files are excluded, Venaroq publishes a deterministic no-review-needed summary and
   completes the same Check Run successfully without an Anthropic Messages call.
 - Provider collection completeness is evaluated before exclusions. Exclusions cannot make an
   incomplete provider response appear complete.
@@ -157,12 +157,12 @@ nothing.”
 
 Add settings with fail-closed defaults:
 
-- `REVIO_REVIEW_ROLLOUT_REPOSITORIES`: comma-separated stable repository identities; empty means no
+- `VENAROQ_REVIEW_ROLLOUT_REPOSITORIES`: comma-separated stable repository identities; empty means no
   repositories are eligible when publishing is enabled.
-- `REVIO_REVIEW_ALLOW_REPOSITORY_OPTOUT=false`.
-- `REVIO_REVIEW_DRAFTS_ENABLED=true`.
-- `REVIO_REVIEW_PROTECTED_EXCLUSIONS`: optional administrator patterns merged with the mandatory
-  `.revio.yml` exclusion.
+- `VENAROQ_REVIEW_ALLOW_REPOSITORY_OPTOUT=false`.
+- `VENAROQ_REVIEW_DRAFTS_ENABLED=true`.
+- `VENAROQ_REVIEW_PROTECTED_EXCLUSIONS`: optional administrator patterns merged with the mandatory
+  `.venaroq.yml` exclusion.
 
 The rollout identity is provider-neutral and includes provider ID, installation/account identity, and
 provider repository ID. Repository names are diagnostic only and never authorize rollout.
@@ -188,7 +188,7 @@ The worker already re-fetches the current `ChangeRequest`. Phase 5 uses that sam
 
 1. require event head SHA to match the current head SHA under Phase 3 rules;
 2. evaluate administrator rollout from stable normalized repository identity;
-3. fetch `.revio.yml` at exactly `current.base_sha` through `RepositoryContentReadPort.get_file`;
+3. fetch `.venaroq.yml` at exactly `current.base_sha` through `RepositoryContentReadPort.get_file`;
 4. reject any adapter result whose resolved ref is not the requested immutable SHA;
 5. enforce byte and encoding bounds before parsing;
 6. parse and validate the whole document atomically;
@@ -199,7 +199,7 @@ The worker already re-fetches the current `ChangeRequest`. Phase 5 uses that sam
 
 The head SHA is never used to load configuration. A branch name is never used as the ref.
 
-GitHub `404` for `.revio.yml` means missing configuration. Authentication, permission, rate-limit,
+GitHub `404` for `.venaroq.yml` means missing configuration. Authentication, permission, rate-limit,
 timeout, truncation, ref mismatch, and malformed-response outcomes are not treated as missing; they
 produce a bounded warning and secure-default resolution, subject to the existing provider retry rules
 when the read is provably transient and no external review write has begun.
@@ -235,7 +235,7 @@ terminal reason records only the stable service-owned code.
 ### 11.1 Restart rules
 
 - Once a normalized resolution is durable, restart reuses it and does not re-fetch or reinterpret
-  `.revio.yml` for that queue job.
+  `.venaroq.yml` for that queue job.
 - A run with no durable resolution may fetch from the same exact base SHA again because the immutable
   read is idempotent.
 - Configuration never changes a durable ProviderCall identity or authorizes another Messages call.
@@ -297,7 +297,7 @@ The effective policy is applied in this order:
 
 Use the existing repository-content capability. GitHub must:
 
-- request `/repos/{owner}/{repo}/contents/.revio.yml?ref={exact_base_sha}`;
+- request `/repos/{owner}/{repo}/contents/.venaroq.yml?ref={exact_base_sha}`;
 - accept only a regular file with bounded Base64 content;
 - validate the provider-reported object identity/ref where available;
 - distinguish missing from permission/transient/malformed results;
@@ -394,10 +394,10 @@ Durable per-run resolution, not the cache, is the restart authority.
 
 ## 17. Manual sandbox validation
 
-Use only `sraj0210/revio-phase4-sandbox` and the dedicated GitHub App.
+Use only `sraj0210/venaroq-phase4-sandbox` and the dedicated GitHub App.
 
-1. Establish a base without `.revio.yml`; confirm secure defaults.
-2. Open a PR adding `.revio.yml`; confirm that PR still uses its old base configuration.
+1. Establish a base without `.venaroq.yml`; confirm secure defaults.
+2. Open a PR adding `.venaroq.yml`; confirm that PR still uses its old base configuration.
 3. Merge the config-only PR in the sandbox repository.
 4. Open a later synthetic PR; confirm the merged config is loaded from its exact base SHA.
 5. Verify a repository-added exclusion and raised confidence threshold.

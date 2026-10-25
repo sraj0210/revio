@@ -4,18 +4,18 @@ from typing import Any, cast
 
 import pytest
 
-from revio.adapters.scm.github.client import GitHubClient
-from revio.adapters.scm.github.errors import GitHubResponseError, GitHubValidationError
-from revio.adapters.scm.github.threads import GitHubThreadReader, GitHubThreadResolver
-from revio.domain.identifiers import (
+from venaroq.adapters.scm.github.client import GitHubClient
+from venaroq.adapters.scm.github.errors import GitHubResponseError, GitHubValidationError
+from venaroq.adapters.scm.github.threads import GitHubThreadReader, GitHubThreadResolver
+from venaroq.domain.identifiers import (
     ChangeRequestTarget,
     InstallationRef,
     ProviderId,
     RepositoryRef,
 )
 
-MARKER = "<!-- revio:v1:finding:AAAAAAAAAAAAAAAAAAAAAAAA -->"
-OTHER = "<!-- revio:v1:finding:BBBBBBBBBBBBBBBBBBBBBBBB -->"
+MARKER = "<!-- venaroq:v1:finding:AAAAAAAAAAAAAAAAAAAAAAAA -->"
+OTHER = "<!-- venaroq:v1:finding:BBBBBBBBBBBBBBBBBBBBBBBB -->"
 
 
 def _target() -> ChangeRequestTarget:

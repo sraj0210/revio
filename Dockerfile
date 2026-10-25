@@ -7,11 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN groupadd --system revio \
-    && useradd --system --gid revio --home-dir /app revio \
-    && mkdir -p /var/lib/revio \
-    && chown revio:revio /var/lib/revio \
-    && chmod 700 /var/lib/revio
+RUN groupadd --system venaroq \
+    && useradd --system --gid venaroq --home-dir /app venaroq \
+    && mkdir -p /var/lib/venaroq \
+    && chown venaroq:venaroq /var/lib/venaroq \
+    && chmod 700 /var/lib/venaroq
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
 COPY pyproject.toml uv.lock README.md LICENSE alembic.ini ./
@@ -21,11 +21,11 @@ COPY src ./src
 COPY migrations ./migrations
 RUN uv sync --frozen --no-dev
 
-USER revio
+USER venaroq
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
   CMD ["/app/.venv/bin/python", "-c", "import json, urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2); assert response.status == 200; assert json.load(response) == {'status': 'ok'}"]
 
-CMD ["/app/.venv/bin/uvicorn", "revio.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/.venv/bin/uvicorn", "venaroq.main:app", "--host", "0.0.0.0", "--port", "8000"]

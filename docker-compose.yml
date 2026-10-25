@@ -2,52 +2,52 @@ services:
   migrate:
     build:
       context: .
-    command: ["/app/.venv/bin/revio-db", "upgrade"]
-    environment: &revio-environment
-      REVIO_ENVIRONMENT: ${REVIO_ENVIRONMENT:-local}
-      REVIO_DATABASE_PATH: /var/lib/revio/revio.db
-      REVIO_GITHUB_ENABLED: ${REVIO_GITHUB_ENABLED:-false}
-      REVIO_GITHUB_ALLOW_IDLE_WORKER: ${REVIO_GITHUB_ALLOW_IDLE_WORKER:-false}
-      REVIO_GITHUB_WEBHOOK_MODE: ${REVIO_GITHUB_WEBHOOK_MODE:-disabled}
-      REVIO_GITHUB_APP_ID: ${REVIO_GITHUB_APP_ID:-}
-      REVIO_GITHUB_PRIVATE_KEY: ${REVIO_GITHUB_PRIVATE_KEY:-}
-      REVIO_GITHUB_PRIVATE_KEY_FILE: ${REVIO_GITHUB_PRIVATE_KEY_FILE:-}
-      REVIO_GITHUB_WEBHOOK_SECRET: ${REVIO_GITHUB_WEBHOOK_SECRET:-}
-      REVIO_REVIEW_ENABLED: ${REVIO_REVIEW_ENABLED:-false}
-      REVIO_REVIEW_PUBLISH_ENABLED: ${REVIO_REVIEW_PUBLISH_ENABLED:-false}
-      REVIO_REVIEW_MODEL_ALIAS: ${REVIO_REVIEW_MODEL_ALIAS:-}
-      REVIO_REVIEW_FALLBACK_ALIAS: ${REVIO_REVIEW_FALLBACK_ALIAS:-review-default}
-      REVIO_REVIEW_ROLLOUT_REPOSITORIES: ${REVIO_REVIEW_ROLLOUT_REPOSITORIES:-}
-      REVIO_REVIEW_ALLOW_REPOSITORY_OPTOUT: ${REVIO_REVIEW_ALLOW_REPOSITORY_OPTOUT:-false}
-      REVIO_REVIEW_DRAFTS_ENABLED: ${REVIO_REVIEW_DRAFTS_ENABLED:-true}
-      REVIO_REVIEW_PROTECTED_EXCLUSIONS: ${REVIO_REVIEW_PROTECTED_EXCLUSIONS:-}
-      REVIO_REVIEW_AGENT_MODE_ENABLED: ${REVIO_REVIEW_AGENT_MODE_ENABLED:-false}
-      REVIO_ANTHROPIC_ENABLED: ${REVIO_ANTHROPIC_ENABLED:-false}
-      REVIO_ANTHROPIC_API_KEY: ${REVIO_ANTHROPIC_API_KEY:-}
-      REVIO_ANTHROPIC_API_KEY_FILE: ${REVIO_ANTHROPIC_API_KEY_FILE:-}
-      REVIO_OPENAI_ENABLED: ${REVIO_OPENAI_ENABLED:-false}
-      REVIO_OPENAI_API_KEY: ${REVIO_OPENAI_API_KEY:-}
-      REVIO_OPENAI_API_KEY_FILE: ${REVIO_OPENAI_API_KEY_FILE:-}
-      REVIO_PUBLISH_MARKER_KEY: ${REVIO_PUBLISH_MARKER_KEY:-}
-      REVIO_PUBLISH_MARKER_KEY_FILE: ${REVIO_PUBLISH_MARKER_KEY_FILE:-}
-      REVIO_LOG_LEVEL: ${REVIO_LOG_LEVEL:-info}
-      REVIO_LOG_FORMAT: ${REVIO_LOG_FORMAT:-json}
-      REVIO_METRICS_BIND: ${REVIO_METRICS_BIND:-}
-      REVIO_METRICS_PORT: ${REVIO_METRICS_PORT:-9090}
-      REVIO_INGRESS_RATE_LIMIT: ${REVIO_INGRESS_RATE_LIMIT:-120}
-      REVIO_INGRESS_RATE_WINDOW_SECONDS: ${REVIO_INGRESS_RATE_WINDOW_SECONDS:-60}
+    command: ["/app/.venv/bin/venaroq-db", "upgrade"]
+    environment: &venaroq-environment
+      VENAROQ_ENVIRONMENT: ${VENAROQ_ENVIRONMENT:-local}
+      VENAROQ_DATABASE_PATH: /var/lib/venaroq/venaroq.db
+      VENAROQ_GITHUB_ENABLED: ${VENAROQ_GITHUB_ENABLED:-false}
+      VENAROQ_GITHUB_ALLOW_IDLE_WORKER: ${VENAROQ_GITHUB_ALLOW_IDLE_WORKER:-false}
+      VENAROQ_GITHUB_WEBHOOK_MODE: ${VENAROQ_GITHUB_WEBHOOK_MODE:-disabled}
+      VENAROQ_GITHUB_APP_ID: ${VENAROQ_GITHUB_APP_ID:-}
+      VENAROQ_GITHUB_PRIVATE_KEY: ${VENAROQ_GITHUB_PRIVATE_KEY:-}
+      VENAROQ_GITHUB_PRIVATE_KEY_FILE: ${VENAROQ_GITHUB_PRIVATE_KEY_FILE:-}
+      VENAROQ_GITHUB_WEBHOOK_SECRET: ${VENAROQ_GITHUB_WEBHOOK_SECRET:-}
+      VENAROQ_REVIEW_ENABLED: ${VENAROQ_REVIEW_ENABLED:-false}
+      VENAROQ_REVIEW_PUBLISH_ENABLED: ${VENAROQ_REVIEW_PUBLISH_ENABLED:-false}
+      VENAROQ_REVIEW_MODEL_ALIAS: ${VENAROQ_REVIEW_MODEL_ALIAS:-}
+      VENAROQ_REVIEW_FALLBACK_ALIAS: ${VENAROQ_REVIEW_FALLBACK_ALIAS:-review-default}
+      VENAROQ_REVIEW_ROLLOUT_REPOSITORIES: ${VENAROQ_REVIEW_ROLLOUT_REPOSITORIES:-}
+      VENAROQ_REVIEW_ALLOW_REPOSITORY_OPTOUT: ${VENAROQ_REVIEW_ALLOW_REPOSITORY_OPTOUT:-false}
+      VENAROQ_REVIEW_DRAFTS_ENABLED: ${VENAROQ_REVIEW_DRAFTS_ENABLED:-true}
+      VENAROQ_REVIEW_PROTECTED_EXCLUSIONS: ${VENAROQ_REVIEW_PROTECTED_EXCLUSIONS:-}
+      VENAROQ_REVIEW_AGENT_MODE_ENABLED: ${VENAROQ_REVIEW_AGENT_MODE_ENABLED:-false}
+      VENAROQ_ANTHROPIC_ENABLED: ${VENAROQ_ANTHROPIC_ENABLED:-false}
+      VENAROQ_ANTHROPIC_API_KEY: ${VENAROQ_ANTHROPIC_API_KEY:-}
+      VENAROQ_ANTHROPIC_API_KEY_FILE: ${VENAROQ_ANTHROPIC_API_KEY_FILE:-}
+      VENAROQ_OPENAI_ENABLED: ${VENAROQ_OPENAI_ENABLED:-false}
+      VENAROQ_OPENAI_API_KEY: ${VENAROQ_OPENAI_API_KEY:-}
+      VENAROQ_OPENAI_API_KEY_FILE: ${VENAROQ_OPENAI_API_KEY_FILE:-}
+      VENAROQ_PUBLISH_MARKER_KEY: ${VENAROQ_PUBLISH_MARKER_KEY:-}
+      VENAROQ_PUBLISH_MARKER_KEY_FILE: ${VENAROQ_PUBLISH_MARKER_KEY_FILE:-}
+      VENAROQ_LOG_LEVEL: ${VENAROQ_LOG_LEVEL:-info}
+      VENAROQ_LOG_FORMAT: ${VENAROQ_LOG_FORMAT:-json}
+      VENAROQ_METRICS_BIND: ${VENAROQ_METRICS_BIND:-}
+      VENAROQ_METRICS_PORT: ${VENAROQ_METRICS_PORT:-9090}
+      VENAROQ_INGRESS_RATE_LIMIT: ${VENAROQ_INGRESS_RATE_LIMIT:-120}
+      VENAROQ_INGRESS_RATE_WINDOW_SECONDS: ${VENAROQ_INGRESS_RATE_WINDOW_SECONDS:-60}
     volumes:
-      - revio-data:/var/lib/revio
+      - venaroq-data:/var/lib/venaroq
     restart: "no"
 
   api:
     build:
       context: .
-    environment: *revio-environment
+    environment: *venaroq-environment
     ports:
-      - "${REVIO_PORT:-8000}:8000"
+      - "${VENAROQ_PORT:-8000}:8000"
     volumes:
-      - revio-data:/var/lib/revio
+      - venaroq-data:/var/lib/venaroq
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -67,10 +67,10 @@ services:
   worker:
     build:
       context: .
-    command: ["/app/.venv/bin/revio-worker", "run"]
-    environment: *revio-environment
+    command: ["/app/.venv/bin/venaroq-worker", "run"]
+    environment: *venaroq-environment
     volumes:
-      - revio-data:/var/lib/revio
+      - venaroq-data:/var/lib/venaroq
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -79,11 +79,11 @@ services:
     stop_signal: SIGTERM
     stop_grace_period: 40s
     healthcheck:
-      test: ["CMD", "/app/.venv/bin/revio-worker", "health"]
+      test: ["CMD", "/app/.venv/bin/venaroq-worker", "health"]
       interval: 5s
       timeout: 3s
       retries: 5
       start_period: 5s
 
 volumes:
-  revio-data:
+  venaroq-data:

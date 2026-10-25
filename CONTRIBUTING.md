@@ -1,4 +1,4 @@
-# Contributing to Revio
+# Contributing to Venaroq
 
 Thank you for contributing.
 

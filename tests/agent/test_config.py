@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from revio.config.review import ReviewSettings
+from venaroq.config.review import ReviewSettings
 
 
 def test_per_file_byte_limit_is_capped_to_the_tool_result_bound() -> None:

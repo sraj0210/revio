@@ -32,9 +32,9 @@ jobs:
         run: uv run pytest
       - name: Validate empty database migration and revision
         run: |
-          export REVIO_DATABASE_PATH="$RUNNER_TEMP/revio.db"
-          uv run revio-db upgrade
-          uv run revio-db check
+          export VENAROQ_DATABASE_PATH="$RUNNER_TEMP/venaroq.db"
+          uv run venaroq-db upgrade
+          uv run venaroq-db check
 
   container:
     runs-on: ubuntu-latest
@@ -44,15 +44,15 @@ jobs:
         run: docker compose build
       - name: Configure durable-mode container validation
         run: |
-          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUNNER_TEMP/revio-ci.pem" 2>/dev/null
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUNNER_TEMP/venaroq-ci.pem" 2>/dev/null
           {
-            echo "REVIO_GITHUB_ENABLED=true"
-            echo "REVIO_GITHUB_WEBHOOK_MODE=durable"
-            echo "REVIO_GITHUB_APP_ID=1"
-            echo "REVIO_GITHUB_WEBHOOK_SECRET=ci-webhook-secret"
-            echo "REVIO_GITHUB_PRIVATE_KEY<<REVIO_CI_KEY"
-            cat "$RUNNER_TEMP/revio-ci.pem"
-            echo "REVIO_CI_KEY"
+            echo "VENAROQ_GITHUB_ENABLED=true"
+            echo "VENAROQ_GITHUB_WEBHOOK_MODE=durable"
+            echo "VENAROQ_GITHUB_APP_ID=1"
+            echo "VENAROQ_GITHUB_WEBHOOK_SECRET=ci-webhook-secret"
+            echo "VENAROQ_GITHUB_PRIVATE_KEY<<VENAROQ_CI_KEY"
+            cat "$RUNNER_TEMP/venaroq-ci.pem"
+            echo "VENAROQ_CI_KEY"
           } >> "$GITHUB_ENV"
       - name: Start healthy service
         run: docker compose up --detach --wait --wait-timeout 60
@@ -60,7 +60,7 @@ jobs:
         run: |
           curl --fail --silent --show-error http://127.0.0.1:8000/health
           curl --fail --silent --show-error http://127.0.0.1:8000/ready
-          docker compose exec -T worker /app/.venv/bin/revio-worker health
+          docker compose exec -T worker /app/.venv/bin/venaroq-worker health
       - name: Show service logs
         if: failure()
         run: docker compose logs

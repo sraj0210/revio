@@ -4,21 +4,21 @@ from datetime import UTC, datetime
 
 from pydantic import SecretStr
 
-from revio.adapters.ai.anthropic import (
+from tests.agent.test_tool_executor import FakeContent
+from venaroq.adapters.ai.anthropic import (
     AnthropicReviewAdapter,
     anthropic_agent_model_profile,
     anthropic_model_profile,
 )
-from revio.adapters.ai.openai import openai_model_profile
-from revio.application.review.agent import AgentReviewService
-from revio.application.review.execution import build_artifact
-from revio.config.anthropic import AnthropicSettings
-from revio.config.review import ReviewSettings
-from revio.domain.capabilities import SCMCapabilities
-from revio.domain.models import AgentProvenance, ConsultedFile
-from revio.registries import SCMAdapterBundle
-from revio.worker.main import select_reviewer
-from tests.agent.test_tool_executor import FakeContent
+from venaroq.adapters.ai.openai import openai_model_profile
+from venaroq.application.review.agent import AgentReviewService
+from venaroq.application.review.execution import build_artifact
+from venaroq.config.anthropic import AnthropicSettings
+from venaroq.config.review import ReviewSettings
+from venaroq.domain.capabilities import SCMCapabilities
+from venaroq.domain.models import AgentProvenance, ConsultedFile
+from venaroq.registries import SCMAdapterBundle
+from venaroq.worker.main import select_reviewer
 
 
 def _adapter() -> AnthropicReviewAdapter:

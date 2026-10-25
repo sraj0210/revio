@@ -2,7 +2,7 @@
 
 Status: accepted for Phase 4.
 
-Every actual Messages attempt has immutable identity and a monotonic durable state. Revio commits
+Every actual Messages attempt has immutable identity and a monotonic durable state. Venaroq commits
 `attempt_started` before transmission. A restart with no trustworthy recorded response treats the
 call as ambiguous and never retransmits it, including repair calls. Observed usage is append-only;
 ambiguous usage is explicitly unknown.

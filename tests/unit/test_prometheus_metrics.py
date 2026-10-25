@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from revio.adapters.observability.prometheus import PrometheusQueueMetrics
-from revio.adapters.observability.server import serve_metrics
+from venaroq.adapters.observability.prometheus import PrometheusQueueMetrics
+from venaroq.adapters.observability.server import serve_metrics
 
 
 def test_render_counters_and_gauges() -> None:
@@ -15,12 +15,12 @@ def test_render_counters_and_gauges() -> None:
     m.increment("installation_state_block", outcome="suspended")
     m.gauge("active_jobs", 3)
     text = m.render()
-    assert "# TYPE revio_lease_lost_total counter" in text
-    assert "revio_lease_lost_total 1" in text
-    assert 'revio_installation_state_block_total{outcome="suspended"} 2' in text
-    assert "# TYPE revio_active_jobs gauge" in text
-    assert "revio_active_jobs 3" in text
-    assert "revio_metrics_dropped_total 0" in text
+    assert "# TYPE venaroq_lease_lost_total counter" in text
+    assert "venaroq_lease_lost_total 1" in text
+    assert 'venaroq_installation_state_block_total{outcome="suspended"} 2' in text
+    assert "# TYPE venaroq_active_jobs gauge" in text
+    assert "venaroq_active_jobs 3" in text
+    assert "venaroq_metrics_dropped_total 0" in text
 
 
 def test_label_values_are_escaped() -> None:
@@ -36,16 +36,16 @@ def test_cardinality_guard_caps_series_and_counts_drops() -> None:
         m.increment("metric", outcome=f"o{i}")
     # Only 3 distinct series are retained; the rest are dropped and counted.
     text = m.render()
-    series = [ln for ln in text.splitlines() if ln.startswith("revio_metric_total")]
+    series = [ln for ln in text.splitlines() if ln.startswith("venaroq_metric_total")]
     assert len(series) == 3
-    assert "revio_metrics_dropped_total 7" in text
+    assert "venaroq_metrics_dropped_total 7" in text
 
 
 def test_identifier_like_values_never_become_metric_names() -> None:
     m = PrometheusQueueMetrics()
     m.gauge("weird name/with:chars", 1)
     text = m.render()
-    assert "revio_weird_name_with_chars 1" in text
+    assert "venaroq_weird_name_with_chars 1" in text
 
 
 @pytest.mark.asyncio
@@ -65,7 +65,7 @@ async def test_metrics_server_serves_only_metrics_path() -> None:
             return data.decode("utf-8", "replace")
 
         ok = await request("/metrics")
-        assert "200 OK" in ok and "revio_served_total 1" in ok
+        assert "200 OK" in ok and "venaroq_served_total 1" in ok
         missing = await request("/other")
         assert "404 Not Found" in missing
         bad_method = await request("/metrics", method="POST")

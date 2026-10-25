@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from revio.config.review import ReviewSettings
-from revio.errors import UnknownModelAliasError
-from revio.worker.main import resolve_review_profile
+from venaroq.config.review import ReviewSettings
+from venaroq.errors import UnknownModelAliasError
+from venaroq.worker.main import resolve_review_profile
 
 
 def test_default_alias_selects_anthropic() -> None:
@@ -31,7 +31,7 @@ def test_unknown_alias_is_rejected() -> None:
 
 def test_orchestration_layer_has_no_provider_name_branch() -> None:
     """Acceptance criterion: no provider identifier appears in the core review path."""
-    src = Path(__file__).resolve().parents[2] / "src" / "revio"
+    src = Path(__file__).resolve().parents[2] / "src" / "venaroq"
     roots = (src / "application" / "review", src / "domain", src / "ports")
     offenders: list[str] = []
     for root in roots:
