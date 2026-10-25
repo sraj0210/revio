@@ -1,105 +1,212 @@
 # Revio
 
-Revio is a provider-neutral, self-hostable AI code-review service. It reviews GitHub pull requests with Anthropic or OpenAI (selected by one administrator model alias), deduplicates and conservatively manages prior findings, and ships the single-node production MVP: structured logs, low-cardinality metrics, rate and resource limits, and a fail-closed production-publishing gate.
+**Self-hostable AI code review for GitHub pull requests — powered by Claude or GPT, and built to stay quiet, safe, and yours.**
 
-The approved architecture and phased roadmap are documented in [the implementation plan](docs/architecture/implementation-plan.md).
+[![CI](https://github.com/sraj0210/revio/actions/workflows/ci.yml/badge.svg)](https://github.com/sraj0210/revio/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 
-## Current capabilities
+Revio reviews your pull requests the way a careful teammate would: it reads the diff, flags real
+correctness, security, reliability, and maintainability problems, and posts them back to GitHub as a
+check and inline comments. It runs entirely on your own infrastructure, talks only to the AI provider
+you choose, and is engineered to **fail closed** — no surprise comments, no leaked secrets, no
+duplicate noise on every push.
 
-- A Python 3.12 package using the `src` layout
-- A minimal FastAPI application
-- `GET /health` for process liveness
-- `GET /ready` for SQLite capability, migration, and integrity readiness
-- Provider-neutral identities, review models, capability descriptions, and segregated ports
-- Administrator-controlled provider and model-profile registries
-- A fake-only review orchestration contract harness
-- A read-only GitHub App adapter and sandbox validation CLI
-- Signed sandbox or durable GitHub webhook ingress selected by one mode setting
-- SQLite WAL delivery, installation-state, queue-job, and attempt persistence
-- Atomic leasing, retry/dead-job recovery, current-head validation, and stale supersession
-- Interchangeable Anthropic and OpenAI review generators sharing one `review-v2` contract, selected by an administrator model alias with no provider branch in the core
-- Crash-safe provider-call identities with observed/unknown usage accounting for both providers
-- Bounded, versioned normalized review artifacts reused after restart
-- Reconciled GitHub Check Runs and one non-blocking `COMMENT` review in sandbox mode
-- Strict, versioned `.revio.yml` policy loaded only from the exact pull-request base commit
-- Stable-ID rollout, administrator-protected exclusions, opt-out policy, and durable resolution reuse
-- Versioned finding identity and length-framed primary/secondary fingerprints that exclude generated prose
-- Exact deduplication: exact primary-fingerprint matches are never reposted; all-duplicate runs post no review
-- Deterministic bounded prior selection (at most 25), exact-latest-head evidence collection, and three-state (`fixed`/`still_present`/`uncertain`) revalidation through a distinct, ambiguity-safe provider call
-- Per-finding hidden markers, adapter-private GitHub GraphQL review-thread discovery, and ambiguity-safe `resolveReviewThread` resolution that resolves only confirmed-fixed linked threads
-- Offline terminal-history and 180-day closed-finding retention with permanent delivery tombstones
-- Structured JSON logging with defensive secret/content redaction
-- A low-cardinality Prometheus `/metrics` exporter served only on a separate internal bind
-- Per-source webhook ingress rate limiting and graceful shutdown
-- A fail-closed production-publishing enablement gate
-- Local development and container tooling
-- Automated formatting, linting, type checking, and tests
+---
 
-`/health` intentionally checks process liveness only. `/ready` checks the mandatory SQLite 3.35 capability, migration revision, foreign keys, delivery/tombstone integrity, and finding-lifecycle integrity.
+## Why Revio
 
-## Requirements
+- 🔒 **Self-hosted and private.** Your code and diffs never leave your infrastructure except to the
+  one AI provider you configure. No Revio-operated cloud, no telemetry, no data retention you didn't
+  ask for.
+- 🤝 **Bring your own model.** Use Anthropic Claude or OpenAI GPT interchangeably — switch providers
+  with a single setting. Nothing in the review pipeline is tied to a vendor.
+- 🎯 **Signal over noise.** Findings are deduplicated by a stable fingerprint, so the same issue is
+  never posted twice across force-pushes, and findings are automatically resolved once your code
+  fixes them.
+- 🛡️ **Safe by construction.** Reviewing is read-only until you explicitly opt a repository in.
+  Publishing is gated behind an allow-list and an explicit production confirmation. Ambiguous AI or
+  network outcomes are never retried in a way that could double-post.
+- 🧩 **Configurable per repository.** A committed `.revio.yml` lets each repo tune the review — within
+  the limits administrators set.
+- 📈 **Production-ready operations.** Structured JSON logs with secret redaction, Prometheus metrics
+  on a private bind, per-source rate limiting, graceful shutdown, and a durable work queue that
+  survives restarts.
 
-- Python 3.12
-- [uv](https://docs.astral.sh/uv/)
-- Docker with Docker Compose for container validation
+## What you get
 
-## Local development
+Open a pull request on an enabled repository and Revio will:
 
-Install all locked development dependencies:
+1. Post a **Check Run** that reflects review status on the PR.
+2. Add a concise **review summary** plus **inline comments** on the exact lines that need attention.
+3. Report only **actionable defects** — it prefers staying silent to guessing.
+4. **Skip duplicates** it already raised, and **resolve** comment threads once the underlying issue
+   is fixed in a later push.
+
+## How it works
+
+```
+GitHub PR  ──webhook──▶  Revio API  ──persist──▶  Durable queue (SQLite)
+                                                        │
+                                                        ▼
+                                              Worker: fetch diff ──▶ AI review (Claude / GPT)
+                                                        │
+                                                        ▼
+                             GitHub Check Run + review comments  ◀── dedupe + lifecycle
+```
+
+The API verifies and durably records each webhook, then returns immediately. A single background
+worker leases jobs one at a time, fetches the diff, asks your chosen model for a structured review,
+deduplicates against prior findings, and publishes the result. Every external write is reconciled so
+a crash or timeout can never create a duplicate review.
+
+## Quickstart
+
+### 1. Run the service
+
+```bash
+git clone https://github.com/sraj0210/revio.git
+cd revio
+docker compose up --build
+```
+
+The API comes up on <http://127.0.0.1:8000>. Confirm it's alive:
+
+```bash
+curl --fail http://127.0.0.1:8000/health   # process is up
+curl --fail http://127.0.0.1:8000/ready    # database + migrations healthy
+```
+
+Out of the box, review execution and publishing are **off**. The steps below turn them on.
+
+### 2. Create a GitHub App
+
+Create a GitHub App for your org with:
+
+- **Permissions:** Pull requests — Read & write · Checks — Read & write · Contents — Read ·
+  Metadata — Read
+- **Subscribe to events:** Pull request
+- **Webhook URL:** `https://<your-host>/webhooks/github` with a strong webhook secret
+
+Install the App on the repositories you want reviewed, and download its private key (`.pem`).
+
+### 3. Configure and launch
+
+Copy the example environment and fill in your credentials (keep secrets in files, not inline):
+
+```bash
+cp .env.example .env
+```
+
+A minimal review-enabled configuration:
+
+```bash
+REVIO_ENVIRONMENT=sandbox
+REVIO_GITHUB_ENABLED=true
+REVIO_GITHUB_WEBHOOK_MODE=durable
+REVIO_GITHUB_APP_ID=<your-app-id>
+REVIO_GITHUB_PRIVATE_KEY_FILE=/secrets/github-app.pem
+REVIO_GITHUB_WEBHOOK_SECRET=<your-webhook-secret>
+
+REVIO_REVIEW_ENABLED=true
+REVIO_REVIEW_PUBLISH_ENABLED=true
+
+# Pick one provider:
+REVIO_ANTHROPIC_ENABLED=true
+REVIO_ANTHROPIC_API_KEY_FILE=/secrets/anthropic.key
+# ...or OpenAI instead:
+# REVIO_OPENAI_ENABLED=true
+# REVIO_OPENAI_API_KEY_FILE=/secrets/openai.key
+# REVIO_REVIEW_MODEL_ALIAS=openai-review-default
+
+# Publishing needs a signing key and an explicit per-repo allow-list:
+REVIO_PUBLISH_MARKER_KEY_FILE=/secrets/marker.key
+REVIO_REVIEW_ROLLOUT_REPOSITORIES=github:<installation-id>:<repository-id>
+```
+
+Generate the publish signing key once (any file of 32+ random bytes works):
+
+```bash
+openssl rand -hex 32 > /secrets/marker.key
+```
+
+Bring the stack up, then open a pull request on an enabled repository:
+
+```bash
+docker compose up --build --detach
+```
+
+> **Going to production?** Set `REVIO_ENVIRONMENT=production`. Production publishing is fail-closed:
+> it additionally requires `REVIO_PRODUCTION_PUBLISH_CONFIRMED=true`, a non-empty rollout allow-list,
+> and file-based (not inline) secret sources. Terminate TLS at a reverse proxy in front of Revio.
+
+## Configuration
+
+Revio is configured entirely through environment variables (all prefixed `REVIO_`). The most common:
+
+| Variable | Description |
+| --- | --- |
+| `REVIO_ENVIRONMENT` | `local`, `sandbox`, or `production`. Production enforces the strictest gates. |
+| `REVIO_GITHUB_ENABLED` | Enable the GitHub App adapter. |
+| `REVIO_GITHUB_APP_ID` / `REVIO_GITHUB_PRIVATE_KEY_FILE` | GitHub App credentials. |
+| `REVIO_GITHUB_WEBHOOK_SECRET` | Secret used to verify incoming webhook signatures. |
+| `REVIO_REVIEW_ENABLED` | Turn on AI review execution. |
+| `REVIO_REVIEW_PUBLISH_ENABLED` | Allow Revio to post checks and comments back to GitHub. |
+| `REVIO_REVIEW_MODEL_ALIAS` | Choose the model/provider (`review-default` = Claude, `openai-review-default` = GPT). |
+| `REVIO_ANTHROPIC_ENABLED` / `REVIO_ANTHROPIC_API_KEY_FILE` | Enable and authenticate Claude. |
+| `REVIO_OPENAI_ENABLED` / `REVIO_OPENAI_API_KEY_FILE` | Enable and authenticate GPT. |
+| `REVIO_REVIEW_ROLLOUT_REPOSITORIES` | Allow-list of `provider:installation-id:repository-id`. Empty denies all publishing. |
+| `REVIO_PUBLISH_MARKER_KEY_FILE` | Signing key for Revio's own comment markers (dedup + lifecycle). |
+| `REVIO_METRICS_BIND` | Internal bind for the Prometheus `/metrics` endpoint (empty = disabled). |
+
+See [`.env.example`](.env.example) for the complete, documented list.
+
+## Per-repository configuration
+
+Teams can tune reviews by committing a `.revio.yml` to a repository's default branch. Repository
+settings can only **narrow** what administrators allow — they can never raise limits, enable disabled
+providers, remove protected exclusions, or override the rollout allow-list. Missing or invalid
+configuration falls back to safe defaults and never silently skips a review.
+
+## Run from source
+
+Requires [Python 3.12](https://www.python.org/) and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync --frozen --all-groups
-```
 
-Apply the migration, then run the API and worker separately:
-
-```bash
+# Apply migrations, then run the worker and API (separate processes):
 REVIO_DATABASE_PATH=/absolute/path/revio.db uv run revio-db upgrade
-REVIO_DATABASE_PATH=/absolute/path/revio.db uv run revio-worker check-ready
 REVIO_DATABASE_PATH=/absolute/path/revio.db uv run revio-worker run
 uv run uvicorn revio.main:app --reload
 ```
 
-The service listens at <http://127.0.0.1:8000>. Check liveness with:
-
-```bash
-curl --fail http://127.0.0.1:8000/health
-curl --fail http://127.0.0.1:8000/ready
-```
-
-Run the complete local validation suite:
+Run the full check suite the CI uses:
 
 ```bash
 uv run ruff format --check .
 uv run ruff check .
 uv run pyright
 uv run pytest
-docker compose build
-docker compose up --detach --wait
-docker compose down
 ```
 
-## Configuration
+## Security
 
-Copy `.env.example` to `.env` for optional local overrides. The example contains no credentials. Reviews fail closed unless the stable `provider:installation-id:repository-id` identity appears in `REVIO_REVIEW_ROLLOUT_REPOSITORIES`. A repository may only narrow administrator policy through `.revio.yml`; missing configuration uses secure defaults.
+- **Secrets stay out of logs and the database.** Logs are structured JSON with a defensive redactor;
+  raw diffs, prompts, provider responses, and credentials are never persisted.
+- **Credentials from files, not inline, in production.** GitHub keys, provider API keys, and the
+  marker key must be file-mounted secrets in production.
+- **No ambiguous retries.** If an AI call or external write might have taken effect, Revio never
+  blindly retries it — correctness is preferred over coverage.
 
-## Project status
+Found a vulnerability? Please follow [SECURITY.md](SECURITY.md). Do not open a public issue for
+security reports.
 
-Phase 3 durability remains the ingress foundation. Review execution and publication are separately disabled by default. Execution uses a pinned, deterministic model — default `claude-sonnet-5`, or OpenAI `gpt-5.1` when the `openai-review-default` alias is selected — with thinking/reasoning minimized, structured output, bounded admission, and no retransmission after an ambiguous provider attempt. Phase 5 configuration resolution is normalized and persisted before Check Run or provider work, and restart never reinterprets a durable resolution.
+## Contributing
 
-Durable ingress uses `503 {"status":"not_accepted"}` only when persistence is confirmed absent. `500 {"status":"indeterminate"}` means commit disposition could not be established; an exact later redelivery is safe because delivery identity and payload hash remain idempotently enforced. Sanitized integrity failures use `500 {"status":"integrity_error"}` and make readiness fail while contradictory durable facts remain.
-
-Exactly one worker process is enforced by a process-lifetime lock next to the SQLite
-database. `revio-worker check-ready` is a pre-start check; a running worker exposes
-the separate `revio-worker health` command for container health checks.
-
-Production publishing is unlocked only by a fail-closed gate: in `production` it requires an explicit `REVIO_PRODUCTION_PUBLISH_CONFIRMED`, a non-empty rollout allow-list, and file-based secret sources; any missing precondition rejects startup. Observability is operator-configured: JSON logs to stdout and a Prometheus `/metrics` endpoint served only on a separate internal bind (`REVIO_METRICS_BIND`), never on the public webhook listener. Anthropic and OpenAI are both supported; selection is by administrator model alias with no provider branch in the core, and OpenAI is validated with mocked HTTP (a live cross-provider run is pending an OpenAI key). Additional SCM providers (GitLab, Bitbucket), PostgreSQL, Redis, multiple workers, and agent mode remain out of scope; see the [implementation plan](docs/architecture/implementation-plan.md) for the phased roadmap.
-
-When `REVIO_GITHUB_ENABLED=true`, application bootstrap validates the RSA key and registers the GitHub read and repository-content ports. Operational worker readiness requires this adapter. An intentionally idle local-development worker additionally requires `REVIO_GITHUB_ALLOW_IDLE_WORKER=true`; production and durable modes reject it. The sandbox CLI uses the same adapter-private composition factory. Changed-file and tree output includes explicit completeness values; any value other than `complete` is partial and must not be interpreted as a complete repository view.
-
-## Contributing and security
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing changes. Report vulnerabilities according to [SECURITY.md](SECURITY.md). Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) to get started, and please follow
+our [Code of Conduct](CODE_OF_CONDUCT.md). The architecture and design decisions are documented under
+[`docs/`](docs/).
 
 ## License
 
