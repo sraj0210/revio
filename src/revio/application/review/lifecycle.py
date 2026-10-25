@@ -78,8 +78,9 @@ from revio.ports.scm import (
 SELECTION_LIMIT = 25
 PER_FILE_BYTE_LIMIT = 128 * 1024
 AGGREGATE_BYTE_LIMIT = 512 * 1024
-# Duplicated from the Anthropic adapter to avoid an application->adapter dependency; both must
-# stay in sync, exactly like the review prompt/schema version constants.
+# The revalidation contract version is provider-neutral and owned by the application layer, kept
+# independent of any adapter to avoid an application->adapter dependency; every provider adapter
+# builds requests against the same shared schema and must stay in sync with these constants.
 REVALIDATION_PROMPT_VERSION = "revalidation-v1"
 REVALIDATION_SCHEMA_VERSION = "revalidation-v1"
 

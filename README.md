@@ -1,6 +1,6 @@
 # Revio
 
-Revio is a provider-neutral, self-hostable AI code-review service. It reviews GitHub pull requests with Anthropic, deduplicates and conservatively manages prior findings, and ships the single-node production MVP: structured logs, low-cardinality metrics, rate and resource limits, and a fail-closed production-publishing gate.
+Revio is a provider-neutral, self-hostable AI code-review service. It reviews GitHub pull requests with Anthropic or OpenAI (selected by one administrator model alias), deduplicates and conservatively manages prior findings, and ships the single-node production MVP: structured logs, low-cardinality metrics, rate and resource limits, and a fail-closed production-publishing gate.
 
 The approved architecture and phased roadmap are documented in [the implementation plan](docs/architecture/implementation-plan.md).
 
@@ -17,7 +17,8 @@ The approved architecture and phased roadmap are documented in [the implementati
 - Signed sandbox or durable GitHub webhook ingress selected by one mode setting
 - SQLite WAL delivery, installation-state, queue-job, and attempt persistence
 - Atomic leasing, retry/dead-job recovery, current-head validation, and stale supersession
-- Crash-safe Anthropic ProviderCall identities with observed/unknown usage accounting
+- Interchangeable Anthropic and OpenAI review generators sharing one `review-v2` contract, selected by an administrator model alias with no provider branch in the core
+- Crash-safe provider-call identities with observed/unknown usage accounting for both providers
 - Bounded, versioned normalized review artifacts reused after restart
 - Reconciled GitHub Check Runs and one non-blocking `COMMENT` review in sandbox mode
 - Strict, versioned `.revio.yml` policy loaded only from the exact pull-request base commit
@@ -84,7 +85,7 @@ Copy `.env.example` to `.env` for optional local overrides. The example contains
 
 ## Project status
 
-Phase 3 durability remains the ingress foundation. Review execution and publication are separately disabled by default. Execution uses pinned `claude-sonnet-5` with thinking disabled, structured output, bounded admission, and no retransmission after an ambiguous Messages attempt. Phase 5 configuration resolution is normalized and persisted before Check Run or Anthropic work, and restart never reinterprets a durable resolution.
+Phase 3 durability remains the ingress foundation. Review execution and publication are separately disabled by default. Execution uses a pinned, deterministic model — default `claude-sonnet-5`, or OpenAI `gpt-5.1` when the `openai-review-default` alias is selected — with thinking/reasoning minimized, structured output, bounded admission, and no retransmission after an ambiguous provider attempt. Phase 5 configuration resolution is normalized and persisted before Check Run or provider work, and restart never reinterprets a durable resolution.
 
 Durable ingress uses `503 {"status":"not_accepted"}` only when persistence is confirmed absent. `500 {"status":"indeterminate"}` means commit disposition could not be established; an exact later redelivery is safe because delivery identity and payload hash remain idempotently enforced. Sanitized integrity failures use `500 {"status":"integrity_error"}` and make readiness fail while contradictory durable facts remain.
 
@@ -92,7 +93,7 @@ Exactly one worker process is enforced by a process-lifetime lock next to the SQ
 database. `revio-worker check-ready` is a pre-start check; a running worker exposes
 the separate `revio-worker health` command for container health checks.
 
-Production publishing is unlocked only by a fail-closed gate: in `production` it requires an explicit `REVIO_PRODUCTION_PUBLISH_CONFIRMED`, a non-empty rollout allow-list, and file-based secret sources; any missing precondition rejects startup. Observability is operator-configured: JSON logs to stdout and a Prometheus `/metrics` endpoint served only on a separate internal bind (`REVIO_METRICS_BIND`), never on the public webhook listener. A second AI provider (OpenAI), additional SCM providers (GitLab, Bitbucket), PostgreSQL, Redis, multiple workers, and agent mode remain out of scope; see the [implementation plan](docs/architecture/implementation-plan.md) for the phased roadmap.
+Production publishing is unlocked only by a fail-closed gate: in `production` it requires an explicit `REVIO_PRODUCTION_PUBLISH_CONFIRMED`, a non-empty rollout allow-list, and file-based secret sources; any missing precondition rejects startup. Observability is operator-configured: JSON logs to stdout and a Prometheus `/metrics` endpoint served only on a separate internal bind (`REVIO_METRICS_BIND`), never on the public webhook listener. Anthropic and OpenAI are both supported; selection is by administrator model alias with no provider branch in the core, and OpenAI is validated with mocked HTTP (a live cross-provider run is pending an OpenAI key). Additional SCM providers (GitLab, Bitbucket), PostgreSQL, Redis, multiple workers, and agent mode remain out of scope; see the [implementation plan](docs/architecture/implementation-plan.md) for the phased roadmap.
 
 When `REVIO_GITHUB_ENABLED=true`, application bootstrap validates the RSA key and registers the GitHub read and repository-content ports. Operational worker readiness requires this adapter. An intentionally idle local-development worker additionally requires `REVIO_GITHUB_ALLOW_IDLE_WORKER=true`; production and durable modes reject it. The sandbox CLI uses the same adapter-private composition factory. Changed-file and tree output includes explicit completeness values; any value other than `complete` is partial and must not be interpreted as a complete repository view.
 

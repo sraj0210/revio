@@ -7,7 +7,12 @@ import socket
 import sys
 from typing import cast
 
-from revio.adapters.ai.anthropic import AnthropicReviewAdapter, anthropic_model_profile
+from revio.adapters.ai.anthropic import (
+    ANTHROPIC_PROVIDER_ID,
+    AnthropicReviewAdapter,
+    anthropic_model_profile,
+)
+from revio.adapters.ai.openai import OPENAI_PROVIDER_ID, OpenAIReviewAdapter, openai_model_profile
 from revio.adapters.observability import configure_logging
 from revio.adapters.observability.prometheus import PrometheusQueueMetrics
 from revio.adapters.observability.server import serve_metrics
@@ -27,16 +32,23 @@ from revio.config.anthropic import AnthropicSettings
 from revio.config.database import DatabaseSettings
 from revio.config.github import GitHubSettings
 from revio.config.observability import ObservabilitySettings
+from revio.config.openai import OpenAISettings
 from revio.config.queue import QueueSettings
 from revio.config.review import ReviewSettings
 from revio.domain.capabilities import ResolvedModelProfile
-from revio.domain.identifiers import ModelAlias
+from revio.domain.identifiers import ModelAlias, ProviderId
 from revio.registries import ModelRegistry, ProviderRegistry
 
+# Concrete review adapters known to the composition root. Both satisfy the provider-neutral
+# PreflightedReviewer and AIFindingRevalidator surfaces consumed by the application layer; adding a
+# provider means adding its adapter here and one enablement line in run_worker.
+AIReviewAdapter = AnthropicReviewAdapter | OpenAIReviewAdapter
 
-def resolve_review_profile(settings: ReviewSettings):
+
+def resolve_review_profile(settings: ReviewSettings) -> ResolvedModelProfile:
     models = ModelRegistry()
     models.register(anthropic_model_profile())
+    models.register(openai_model_profile())
     alias = (
         settings.review_model_alias
         if settings.review_model_alias is not None
@@ -58,21 +70,29 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
     github_settings = GitHubSettings()
     review_settings = ReviewSettings()
     anthropic_settings = AnthropicSettings()
-    if review_settings.review_enabled and not anthropic_settings.anthropic_enabled:
-        raise ValueError("review execution requires Anthropic")
+    openai_settings = OpenAISettings()
     github = (
         compose_github(github_settings, review_settings=review_settings)
         if github_settings.github_enabled
         else None
     )
-    anthropic = (
-        AnthropicReviewAdapter(anthropic_settings, review_settings)
-        if review_settings.review_enabled
-        else None
-    )
+    # Composition root: construct every enabled AI adapter keyed by its provider id. Selection is
+    # purely by the resolved model profile's provider_id below; no other layer branches on provider.
+    ai_adapters: dict[ProviderId, AIReviewAdapter] = {}
+    if anthropic_settings.anthropic_enabled:
+        ai_adapters[ANTHROPIC_PROVIDER_ID] = AnthropicReviewAdapter(
+            anthropic_settings, review_settings
+        )
+    if openai_settings.openai_enabled:
+        ai_adapters[OPENAI_PROVIDER_ID] = OpenAIReviewAdapter(openai_settings, review_settings)
     review_profile = (
         resolve_review_profile(review_settings) if review_settings.review_enabled else None
     )
+    ai_adapter: AIReviewAdapter | None = None
+    if review_profile is not None:
+        ai_adapter = ai_adapters.get(review_profile.provider_id)
+        if ai_adapter is None:
+            raise ValueError("selected review provider is not enabled")
     if github is None and not github_settings.github_allow_idle_worker:
         raise ValueError("worker requires an enabled provider adapter")
     lock = MaintenanceLock(
@@ -104,20 +124,20 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                 providers = ProviderRegistry()
                 providers.register_scm(GITHUB_PROVIDER_ID, github.bundle)
                 credential_cache = GitHubCredentialCache(github.token_cache)
-                if anthropic is not None and review_profile is None:
+                if ai_adapter is not None and review_profile is None:
                     raise RuntimeError("review model profile was not resolved")
                 lifecycle = (
                     FindingLifecycleService(
                         store.findings,
                         github.adapter,
                         github.adapter,
-                        revalidator=anthropic,
+                        revalidator=ai_adapter,
                         thread_reader=github.thread_reader,
                         thread_resolver=github.thread_resolver,
                         marker_key=active_marker_key,
                     )
                     if (
-                        anthropic is not None
+                        ai_adapter is not None
                         and review_settings.review_publish_enabled
                         and active_marker_key is not None
                         and github.thread_reader is not None
@@ -138,7 +158,7 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                             ReviewJobExecutor(
                                 store.reviews,
                                 github.adapter,
-                                ReviewGenerationService(store.reviews, anthropic, review_settings),
+                                ReviewGenerationService(store.reviews, ai_adapter, review_settings),
                                 cast(ResolvedModelProfile, review_profile),
                                 review_settings,
                                 writer=github.writer,
@@ -148,7 +168,7 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                             ),
                             review_settings,
                         )
-                        if anthropic is not None
+                        if ai_adapter is not None
                         else None
                     ),
                 )
@@ -173,8 +193,8 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
     finally:
         if github is not None:
             await github.close()
-        if anthropic is not None:
-            await anthropic.close()
+        for adapter in ai_adapters.values():
+            await adapter.close()
 
 
 def main() -> None:
