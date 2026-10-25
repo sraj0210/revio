@@ -55,5 +55,5 @@ def test_api_uses_same_production_publishing_policy_as_worker(
     monkeypatch.setenv("REVIO_REVIEW_ENABLED", "true")
     monkeypatch.setenv("REVIO_REVIEW_PUBLISH_ENABLED", "true")
     monkeypatch.setenv("REVIO_PUBLISH_MARKER_KEY", "x" * 32)
-    with pytest.raises(Exception, match="forbidden in production"):
+    with pytest.raises(Exception, match="production publishing requires explicit confirmation"):
         create_app()

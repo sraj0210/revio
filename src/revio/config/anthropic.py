@@ -1,7 +1,7 @@
 """Administrator-controlled Anthropic configuration."""
 
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class AnthropicSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="REVIO_", env_ignore_empty=True, extra="ignore")
 
+    environment: Literal["local", "sandbox", "production"] = "local"
     anthropic_enabled: bool = False
     anthropic_api_key: SecretStr | None = None
     anthropic_api_key_file: Path | None = None
@@ -22,6 +23,12 @@ class AnthropicSettings(BaseSettings):
         sources = sum(x is not None for x in (self.anthropic_api_key, self.anthropic_api_key_file))
         if self.anthropic_enabled and sources != 1:
             raise ValueError("exactly one Anthropic API-key source is required")
+        if (
+            self.anthropic_enabled
+            and self.environment == "production"
+            and self.anthropic_api_key_file is None
+        ):
+            raise ValueError("production requires an Anthropic API-key file source")
         if (
             self.anthropic_api_key_file is not None
             and not self.anthropic_api_key_file.is_absolute()

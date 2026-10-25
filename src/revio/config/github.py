@@ -49,6 +49,8 @@ class GitHubSettings(BaseSettings):
                 raise ValueError("GitHub App ID is required when GitHub is enabled")
             if key_sources != 1:
                 raise ValueError("exactly one GitHub private-key source is required")
+            if self.environment == "production" and self.github_private_key_file is None:
+                raise ValueError("production requires a GitHub private-key file source")
         if self.github_webhook_mode != "disabled":
             if not self.github_enabled:
                 raise ValueError("webhook ingress requires the GitHub adapter")

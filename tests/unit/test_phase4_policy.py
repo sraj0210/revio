@@ -42,7 +42,7 @@ def test_review_gates_and_admission_margin() -> None:
     assert settings.admission_token_ceiling == 118_000
     with pytest.raises(ValidationError, match="publishing requires review execution"):
         ReviewSettings(review_publish_enabled=True, publish_marker_key=SecretStr("x" * 32))
-    with pytest.raises(ValidationError, match="forbidden in production"):
+    with pytest.raises(ValidationError, match="production publishing requires explicit confirmation"):
         ReviewSettings(
             environment="production",
             review_enabled=True,
