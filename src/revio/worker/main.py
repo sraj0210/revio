@@ -9,6 +9,8 @@ from typing import cast
 
 from revio.adapters.ai.anthropic import AnthropicReviewAdapter, anthropic_model_profile
 from revio.adapters.observability import configure_logging
+from revio.adapters.observability.prometheus import PrometheusQueueMetrics
+from revio.adapters.observability.server import serve_metrics
 from revio.adapters.persistence.sqlite import SQLiteStore
 from revio.adapters.persistence.sqlite.locks import MaintenanceLock, WorkerInstanceLock
 from revio.adapters.scm.github import GITHUB_PROVIDER_ID
@@ -24,6 +26,7 @@ from revio.application.review.markers import load_marker_key, marker_key_id
 from revio.config.anthropic import AnthropicSettings
 from revio.config.database import DatabaseSettings
 from revio.config.github import GitHubSettings
+from revio.config.observability import ObservabilitySettings
 from revio.config.queue import QueueSettings
 from revio.config.review import ReviewSettings
 from revio.domain.capabilities import ResolvedModelProfile
@@ -46,10 +49,12 @@ def resolve_review_profile(settings: ReviewSettings):
 
 
 async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
-    configure_logging()
+    observability = ObservabilitySettings()
+    configure_logging(observability)
     database = DatabaseSettings()
     queue = QueueSettings()
-    store = SQLiteStore(database, queue)
+    metrics = PrometheusQueueMetrics() if observability.metrics_enabled else None
+    store = SQLiteStore(database, queue, metrics=metrics)
     github_settings = GitHubSettings()
     review_settings = ReviewSettings()
     anthropic_settings = AnthropicSettings()
@@ -157,7 +162,13 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
                 loop = asyncio.get_running_loop()
                 for signum in (signal.SIGINT, signal.SIGTERM):
                     loop.add_signal_handler(signum, worker.request_stop)
-                await worker.run()
+                if metrics is not None:
+                    async with serve_metrics(
+                        metrics, bind=observability.metrics_bind, port=observability.metrics_port
+                    ):
+                        await worker.run()
+                else:
+                    await worker.run()
         return 0
     finally:
         if github is not None:

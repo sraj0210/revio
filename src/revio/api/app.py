@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from revio.adapters.observability import configure_logging
+from revio.adapters.observability.prometheus import PrometheusQueueMetrics
+from revio.adapters.observability.server import serve_metrics
 from revio.adapters.persistence.sqlite import SQLiteStore
 from revio.adapters.persistence.sqlite.locks import MaintenanceLock
 from revio.adapters.scm.github import GITHUB_PROVIDER_ID
@@ -17,6 +19,7 @@ from revio.api.routes.readiness import router as readiness_router
 from revio.application.review.markers import load_marker_key, marker_key_id
 from revio.config.database import DatabaseSettings
 from revio.config.github import GitHubSettings
+from revio.config.observability import ObservabilitySettings
 from revio.config.queue import QueueSettings
 from revio.config.review import ReviewSettings
 from revio.registries import ProviderRegistry
@@ -42,6 +45,7 @@ def create_app(
     durable = persistence
     if github_settings.github_webhook_mode == "durable" and durable is None:
         durable = SQLiteStore(database_settings or DatabaseSettings(), queue_settings)
+    observability = ObservabilitySettings()
     runtime_lock: MaintenanceLock | None = None
 
     @asynccontextmanager
@@ -62,8 +66,15 @@ def create_app(
                     runtime_lock.release()
                     runtime_lock = None
                     raise RuntimeError("unresolved publication uses another marker key")
+        metrics = durable.metrics if durable is not None else None
         try:
-            yield
+            if observability.metrics_enabled and isinstance(metrics, PrometheusQueueMetrics):
+                async with serve_metrics(
+                    metrics, bind=observability.metrics_bind, port=observability.metrics_port
+                ):
+                    yield
+            else:
+                yield
         finally:
             if runtime_lock is not None:
                 runtime_lock.release()
