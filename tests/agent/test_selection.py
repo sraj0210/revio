@@ -17,7 +17,7 @@ from revio.config.review import ReviewSettings
 from revio.domain.capabilities import SCMCapabilities
 from revio.domain.models import AgentProvenance, ConsultedFile
 from revio.registries import SCMAdapterBundle
-from revio.worker.main import _select_reviewer
+from revio.worker.main import select_reviewer
 from tests.agent.test_tool_executor import FakeContent
 
 
@@ -44,7 +44,7 @@ def _settings(*, agent: bool) -> ReviewSettings:
 
 
 def test_all_gates_satisfied_selects_agent_reviewer() -> None:
-    reviewer = _select_reviewer(
+    reviewer = select_reviewer(
         _adapter(), anthropic_agent_model_profile(), _settings(agent=True), _bundle()
     )
     assert isinstance(reviewer, AgentReviewService)
@@ -52,7 +52,7 @@ def test_all_gates_satisfied_selects_agent_reviewer() -> None:
 
 def test_switch_off_stays_diff_only() -> None:
     adapter = _adapter()
-    reviewer = _select_reviewer(
+    reviewer = select_reviewer(
         adapter, anthropic_agent_model_profile(), _settings(agent=False), _bundle()
     )
     assert reviewer is adapter
@@ -60,7 +60,7 @@ def test_switch_off_stays_diff_only() -> None:
 
 def test_non_agent_profile_stays_diff_only() -> None:
     adapter = _adapter()
-    reviewer = _select_reviewer(
+    reviewer = select_reviewer(
         adapter, anthropic_model_profile(), _settings(agent=True), _bundle()
     )
     assert reviewer is adapter
@@ -69,13 +69,13 @@ def test_non_agent_profile_stays_diff_only() -> None:
 def test_openai_profile_stays_diff_only() -> None:
     # OpenAI has no agent-turn adapter; even an agent switch must keep it diff-only.
     adapter = _adapter()
-    reviewer = _select_reviewer(adapter, openai_model_profile(), _settings(agent=True), _bundle())
+    reviewer = select_reviewer(adapter, openai_model_profile(), _settings(agent=True), _bundle())
     assert reviewer is adapter
 
 
 def test_scm_without_file_access_stays_diff_only() -> None:
     adapter = _adapter()
-    reviewer = _select_reviewer(
+    reviewer = select_reviewer(
         adapter, anthropic_agent_model_profile(), _settings(agent=True), _bundle(file_access=False)
     )
     assert reviewer is adapter
@@ -83,7 +83,7 @@ def test_scm_without_file_access_stays_diff_only() -> None:
 
 def test_no_bundle_stays_diff_only() -> None:
     adapter = _adapter()
-    reviewer = _select_reviewer(
+    reviewer = select_reviewer(
         adapter, anthropic_agent_model_profile(), _settings(agent=True), None
     )
     assert reviewer is adapter

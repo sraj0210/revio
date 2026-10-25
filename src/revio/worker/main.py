@@ -64,7 +64,7 @@ def resolve_review_profile(settings: ReviewSettings) -> ResolvedModelProfile:
     return profile
 
 
-def _select_reviewer(
+def select_reviewer(
     ai_adapter: AIReviewAdapter | None,
     profile: ResolvedModelProfile | None,
     settings: ReviewSettings,
@@ -135,7 +135,7 @@ async def run_worker(check_only: bool, *, health_only: bool = False) -> int:
         ai_adapter = ai_adapters.get(review_profile.provider_id)
         if ai_adapter is None:
             raise ValueError("selected review provider is not enabled")
-    reviewer = _select_reviewer(
+    reviewer = select_reviewer(
         ai_adapter, review_profile, review_settings, github.bundle if github is not None else None
     )
     if github is None and not github_settings.github_allow_idle_worker:

@@ -31,16 +31,16 @@ class FakeAgentAdapter:
     """Replays a scripted sequence of turns; raises if a scripted item is an exception."""
 
     def __init__(self, turns: list[AgentTurnResult | Exception]) -> None:
-        self._turns = turns
-        self._index = 0
+        self.turns = turns
+        self.index = 0
         self.appended: list[tuple[object, ...]] = []
 
     async def agent_preflight(self, request: ReviewRequest) -> dict[str, object]:
         return {"messages": [], "_revio_estimated_input_tokens": 1}
 
     async def agent_turn(self, payload: dict[str, object]) -> AgentTurnResult:
-        item = self._turns[self._index]
-        self._index += 1
+        item = self.turns[self.index]
+        self.index += 1
         if isinstance(item, Exception):
             raise item
         return item
@@ -128,4 +128,4 @@ async def test_ambiguous_turn_propagates_and_does_not_retransmit(
     payload = await service.preflight(_request(change_request))
     with pytest.raises(ProviderCallAmbiguousError):
         await service.generate_preflighted(payload)
-    assert adapter._index == 1  # the ambiguous turn was never retried
+    assert adapter.index == 1  # the ambiguous turn was never retried
