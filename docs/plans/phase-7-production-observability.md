@@ -198,7 +198,7 @@ all production gate permutations.
 
 ## 14. Manual / sandbox validation (operability drill)
 
-Use only `sraj0210/venaroq-phase4-sandbox` and the dedicated App. With a fresh tunnel and isolated
+Use only `sraj0210/revio-phase4-sandbox` and the dedicated App. With a fresh tunnel and isolated
 Compose project:
 
 1. Enable JSON logging and `/metrics`; confirm logs carry correlation/outcome fields and no secrets.

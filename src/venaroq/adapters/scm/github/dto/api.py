@@ -41,7 +41,7 @@ class GitHubPullRequestDTO(BaseModel):
 class GitHubFileDTO(BaseModel):
     model_config = ConfigDict(extra="ignore")
     filename: str = Field(min_length=1)
-    pvenaroqus_filename: str | None = None
+    previous_filename: str | None = None
     status: Literal["added", "modified", "removed", "renamed", "copied", "changed", "unchanged"]
     patch: str | None = None
     additions: int | None = Field(default=None, ge=0)

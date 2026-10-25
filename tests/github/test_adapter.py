@@ -130,14 +130,14 @@ async def test_current_pr_and_diff_line_mapping(github_target: ChangeRequestTarg
             "no_textual_patch_unknown_reason",
         ),
         (
-            {"filename": "b", "pvenaroqus_filename": "a", "status": "renamed"},
+            {"filename": "b", "previous_filename": "a", "status": "renamed"},
             "renamed",
             "a",
             "b",
             "no_textual_patch_unknown_reason",
         ),
         (
-            {"filename": "b", "pvenaroqus_filename": "a", "status": "copied"},
+            {"filename": "b", "previous_filename": "a", "status": "copied"},
             "copied",
             "a",
             "b",
@@ -207,13 +207,13 @@ def test_valid_patch_is_complete_and_preserves_change_counts() -> None:
 
 
 @pytest.mark.parametrize("status", ["renamed", "copied"])
-def test_renamed_and_copied_identity_includes_pvenaroqus_filename(
+def test_renamed_and_copied_identity_includes_previous_filename(
     status: Literal["renamed", "copied"],
 ) -> None:
     from venaroq.adapters.scm.github.dto.api import GitHubFileDTO
 
-    first = GitHubFileDTO(filename="new", pvenaroqus_filename="old-a", status=status)
-    second = GitHubFileDTO(filename="new", pvenaroqus_filename="old-b", status=status)
+    first = GitHubFileDTO(filename="new", previous_filename="old-a", status=status)
+    second = GitHubFileDTO(filename="new", previous_filename="old-b", status=status)
     assert GitHubReadAdapter._file_identity(  # pyright: ignore[reportPrivateUsage]
         first
     ) != GitHubReadAdapter._file_identity(  # pyright: ignore[reportPrivateUsage]

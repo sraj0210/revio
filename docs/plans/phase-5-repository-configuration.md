@@ -394,7 +394,7 @@ Durable per-run resolution, not the cache, is the restart authority.
 
 ## 17. Manual sandbox validation
 
-Use only `sraj0210/venaroq-phase4-sandbox` and the dedicated GitHub App.
+Use only `sraj0210/revio-phase4-sandbox` and the dedicated GitHub App.
 
 1. Establish a base without `.venaroq.yml`; confirm secure defaults.
 2. Open a PR adding `.venaroq.yml`; confirm that PR still uses its old base configuration.

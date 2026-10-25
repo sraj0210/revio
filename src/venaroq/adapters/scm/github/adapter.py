@@ -135,11 +135,11 @@ class GitHubReadAdapter:
             unique: list[GitHubFileDTO] = []
             for item in parsed:
                 identity = self._file_identity(item)
-                pvenaroqus = seen.get(identity)
-                if pvenaroqus is None:
+                previous = seen.get(identity)
+                if previous is None:
                     seen[identity] = item
                     unique.append(item)
-                elif pvenaroqus != item:
+                elif previous != item:
                     raise GitHubResponseError("conflicting duplicate GitHub changed file")
             return unique
 
@@ -172,8 +172,8 @@ class GitHubReadAdapter:
     @classmethod
     def _file_identity(cls, item: GitHubFileDTO) -> tuple[str, str, str | None]:
         status = cls._normalized_status(item)
-        pvenaroqus = item.pvenaroqus_filename if status in {"renamed", "copied"} else None
-        return status, item.filename, pvenaroqus
+        previous = item.previous_filename if status in {"renamed", "copied"} else None
+        return status, item.filename, previous
 
     @staticmethod
     def _map_file(item: GitHubFileDTO) -> DiffFile:
@@ -192,7 +192,7 @@ class GitHubReadAdapter:
         elif status == "deleted":
             old_path, new_path = item.filename, None
         elif status in {"renamed", "copied"}:
-            old_path, new_path = item.pvenaroqus_filename, item.filename
+            old_path, new_path = item.previous_filename, item.filename
         else:
             old_path = new_path = item.filename
 

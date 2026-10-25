@@ -463,7 +463,7 @@ class ReviewJobExecutor:
         )
         markers = tuple(marker_of[finding] for finding in findings) if marker_of else ()
         if len(findings) != len(inline_candidates):
-            pvenaroqus_digest = artifact.digest
+            previous_digest = artifact.digest
             replacement = build_artifact(
                 run_id=artifact.review_run_id,
                 profile=self._profile,
@@ -474,7 +474,7 @@ class ReviewJobExecutor:
                 now=now,
             )
             if not await self._repository.replace_artifact(
-                replacement, expected_digest=pvenaroqus_digest
+                replacement, expected_digest=previous_digest
             ):
                 raise RuntimeError("review artifact anchor downgrade lost its CAS race")
             artifact = replacement
