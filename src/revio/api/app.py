@@ -14,6 +14,7 @@ from revio.adapters.scm.github import GITHUB_PROVIDER_ID
 from revio.adapters.scm.github.composition import GitHubComposition, compose_github
 from revio.adapters.scm.github.webhook.ingress import GitHubSandboxWebhookIngress
 from revio.adapters.scm.github.webhook.route import router as github_webhook_router
+from revio.api.ratelimit import FixedWindowRateLimiter
 from revio.api.routes.health import router as health_router
 from revio.api.routes.readiness import router as readiness_router
 from revio.application.review.markers import load_marker_key, marker_key_id
@@ -98,5 +99,9 @@ def create_app(
     )
     application.state.durable_ingress = durable
     application.state.persistence = durable
+    application.state.ingress_rate_limiter = FixedWindowRateLimiter(
+        limit=observability.ingress_rate_limit,
+        window_seconds=observability.ingress_rate_window_seconds,
+    )
     application.include_router(github_webhook_router)
     return application

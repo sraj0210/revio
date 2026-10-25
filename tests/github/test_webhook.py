@@ -64,6 +64,21 @@ async def test_accepts_utf8_json_media_types(rsa_private_key_pem: str, content_t
 
 
 @pytest.mark.asyncio
+async def test_ingress_rate_limit_sheds_excess_requests(rsa_private_key_pem: str) -> None:
+    from revio.api.ratelimit import FixedWindowRateLimiter
+
+    body = json.dumps(pull_payload()).encode()
+    app = create_app(settings(rsa_private_key_pem))
+    app.state.ingress_rate_limiter = FixedWindowRateLimiter(limit=1, window_seconds=60)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await client.post("/webhooks/github", content=body, headers=headers(body))
+        second = await client.post("/webhooks/github", content=body, headers=headers(body))
+    assert first.status_code == 202
+    assert second.status_code == 429
+    assert second.json() == {"status": "rate_limited"}
+
+
+@pytest.mark.asyncio
 async def test_rejects_non_utf8_and_bad_signature(rsa_private_key_pem: str) -> None:
     body = json.dumps(pull_payload()).encode()
     app = create_app(settings(rsa_private_key_pem))

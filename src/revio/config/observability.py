@@ -15,6 +15,9 @@ class ObservabilitySettings(BaseSettings):
     # Empty disables the metrics server entirely.
     metrics_bind: str = ""
     metrics_port: int = Field(default=9090, ge=1, le=65535)
+    # Per-source webhook ingress rate limit (fixed window). Bounded, fail-closed.
+    ingress_rate_limit: int = Field(default=120, ge=1, le=100_000)
+    ingress_rate_window_seconds: float = Field(default=60.0, gt=0, le=3600)
 
     @property
     def metrics_enabled(self) -> bool:

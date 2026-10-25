@@ -16,6 +16,7 @@ from revio.adapters.scm.github.errors import GitHubResponseError
 from revio.adapters.scm.github.webhook.ingress import GitHubSandboxWebhookIngress
 from revio.adapters.scm.github.webhook.normalizer import normalize_webhook
 from revio.adapters.scm.github.webhook.signature import verify_signature
+from revio.api.ratelimit import FixedWindowRateLimiter
 from revio.config.github import GitHubSettings
 from revio.domain.queue import IngressDisposition
 from revio.errors import (
@@ -67,6 +68,18 @@ async def github_webhook(request: Request) -> JSONResponse:
     settings: GitHubSettings = request.app.state.github_settings
     if settings.github_webhook_mode == "disabled":
         raise HTTPException(status_code=404, detail="not found")
+    limiter: FixedWindowRateLimiter | None = getattr(
+        request.app.state, "ingress_rate_limiter", None
+    )
+    if limiter is not None:
+        source = request.client.host if request.client is not None else "unknown"
+        if not limiter.allow(source):
+            logger.warning("github_webhook_rate_limited", extra={"correlation_id": correlation_id})
+            return JSONResponse(
+                status_code=429,
+                content={"status": "rate_limited"},
+                headers={"Retry-After": "1"},
+            )
     if not _json_media_type(request.headers.get("content-type")):
         raise HTTPException(status_code=415, detail="unsupported media type")
     body = await _bounded_body(request, settings.github_webhook_max_bytes)
