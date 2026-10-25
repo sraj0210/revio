@@ -36,6 +36,7 @@ class QueueWorker:
         self._stop = asyncio.Event()
 
     def request_stop(self) -> None:
+        logger.info("queue_worker_stop_requested")
         self._stop.set()
 
     def _now(self) -> datetime:
@@ -150,3 +151,4 @@ class QueueWorker:
                     )
                 except TimeoutError:
                     pass
+        logger.info("queue_worker_stopped")

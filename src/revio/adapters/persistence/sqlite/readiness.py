@@ -1,5 +1,6 @@
 """SQLite readiness, integrity, and bounded operator status."""
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -10,6 +11,8 @@ from revio.adapters.persistence.sqlite.connection import SQLiteConnectionPolicy,
 from revio.adapters.persistence.sqlite.schema import SCHEMA_REVISION
 from revio.adapters.persistence.sqlite.values import datetime_value
 from revio.errors import PersistenceUnavailableError
+
+logger = logging.getLogger(__name__)
 
 
 class SQLiteReadinessRepository:
@@ -23,7 +26,9 @@ class SQLiteReadinessRepository:
     async def check_ready(self) -> bool:
         ready = await self._check(include_integrity=True)
         if ready != self._last_ready:
-            self._connections.metric("readiness_change", outcome="ready" if ready else "not_ready")
+            outcome = "ready" if ready else "not_ready"
+            self._connections.metric("readiness_change", outcome=outcome)
+            logger.info("readiness_transition", extra={"outcome": outcome})
             self._last_ready = ready
         return ready
 
