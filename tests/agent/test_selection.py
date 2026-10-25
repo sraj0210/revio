@@ -60,9 +60,7 @@ def test_switch_off_stays_diff_only() -> None:
 
 def test_non_agent_profile_stays_diff_only() -> None:
     adapter = _adapter()
-    reviewer = select_reviewer(
-        adapter, anthropic_model_profile(), _settings(agent=True), _bundle()
-    )
+    reviewer = select_reviewer(adapter, anthropic_model_profile(), _settings(agent=True), _bundle())
     assert reviewer is adapter
 
 
