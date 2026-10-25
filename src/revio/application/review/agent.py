@@ -11,18 +11,26 @@ the shared provider-call taxonomy raised by the adapter.
 """
 
 from revio.application.review.agent_tools import AgentLimits, AgentToolExecutor
+from revio.application.review.execution import contains_long_verbatim_source
 from revio.domain.models import (
     ChangeRequestTarget,
     ReviewRequest,
     ReviewResult,
     TokenUsage,
 )
-from revio.errors import IncompleteReviewInputError, MalformedProviderOutputError
+from revio.errors import (
+    IncompleteReviewInputError,
+    MalformedProviderOutputError,
+    ProviderCallObservedTerminalError,
+)
 from revio.ports.ai import AgentReviewGenerator
 from revio.ports.scm import RepositoryContentReadPort
 
 _NO_CONVERGENCE_SUMMARY = (
     "Agent review did not converge within its step budget; no findings were published."
+)
+_QUOTED_CONTENT_SUMMARY = (
+    "Agent review was withheld because its output reproduced fetched repository content."
 )
 
 
@@ -33,6 +41,22 @@ def _add_usage(a: TokenUsage, b: TokenUsage) -> TokenUsage:
         cache_creation_tokens=a.cache_creation_tokens + b.cache_creation_tokens,
         output_tokens=a.output_tokens + b.output_tokens,
     )
+
+
+def _quotes_fetched_content(result: ReviewResult, fetched: tuple[str, ...]) -> bool:
+    """True if the published prose reproduces a long verbatim span from any fetched file.
+
+    This enforces verification-only: the model may read files to judge findings but must not copy
+    their contents into the summary or finding narrative, closing the main exfiltration channel.
+    """
+    if not fetched:
+        return False
+    prose = (
+        result.summary,
+        *(finding.title for finding in result.findings),
+        *(finding.explanation for finding in result.findings),
+    )
+    return contains_long_verbatim_source(prose, fetched)
 
 
 class AgentReviewService:
@@ -64,14 +88,37 @@ class AgentReviewService:
         total = TokenUsage()
         state = payload
         for _ in range(self._max_turns):
-            turn = await self._adapter.agent_turn(state)
+            try:
+                turn = await self._adapter.agent_turn(state)
+            except ProviderCallObservedTerminalError as error:
+                # Fold prior turns' tokens into observed usage so accounting is not undercounted.
+                observed = error.usage if isinstance(error.usage, TokenUsage) else TokenUsage()
+                raise ProviderCallObservedTerminalError(
+                    str(error), usage=_add_usage(total, observed), reason=error.reason
+                ) from None
+            except MalformedProviderOutputError as error:
+                observed = error.usage if isinstance(error.usage, TokenUsage) else TokenUsage()
+                raise MalformedProviderOutputError(
+                    str(error), usage=_add_usage(total, observed)
+                ) from None
             total = _add_usage(total, turn.usage)
             if turn.final_review is not None:
                 # A final review stands even if context was limited; the provenance note records
                 # that. Findings are kept (verification-only mode never drops on limited context).
-                return turn.final_review.model_copy(
+                review = turn.final_review.model_copy(
                     update={"usage": total, "provenance": executor.provenance()}
                 )
+                if _quotes_fetched_content(review, executor.fetched_contents()):
+                    # The model copied fetched file content into its output: withhold it entirely
+                    # rather than publish a potential data-exfiltration channel.
+                    return ReviewResult(
+                        findings=(),
+                        summary=_QUOTED_CONTENT_SUMMARY,
+                        usage=total,
+                        partial=True,
+                        provenance=executor.provenance().model_copy(update={"complete": False}),
+                    )
+                return review
             if not turn.tool_calls:
                 raise MalformedProviderOutputError(
                     "agent turn produced neither tools nor a review", usage=total

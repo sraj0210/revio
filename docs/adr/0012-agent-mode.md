@@ -20,12 +20,22 @@ execution, or lifecycle layers; a grep-style guard test enforces this.
 Tools are executed by the core through a guarded executor (`AgentToolExecutor`) over the existing
 `RepositoryContentReadPort`, pinned to the pull request's head commit. The executor is the single
 place that decides what the model may read: it canonicalizes paths and rejects traversal, absolute
-paths, and control characters; enforces a secret deny-list (`*.pem`, `*.key`, `.env*`, `id_rsa*`,
-`.git/**`, `secrets*`, credentials, …) that is never returned even when explicitly requested; and
-caps per-file bytes, aggregate bytes, distinct files, and total tool calls. Reaching a budget marks
-the context incomplete and stops rather than crawling further. Fetched content is returned only as an
-untrusted tool result and can never change which tools exist, the limits, or whether a finding is
-created.
+paths, and C0/DEL/C1 control characters; enforces a **case-insensitive** secret deny-list (`*.pem`,
+`*.key`, `.env`/`*.env`, `*.tfstate`/`*.tfvars`, `id_rsa*`, `*.gpg`, `kubeconfig`, `.git/**`,
+`.ssh/**`, `.aws/**`, `.kube/**`, credentials, …) that is never returned even when explicitly
+requested; and caps per-file bytes, aggregate bytes (tree listings included), distinct files, and
+total tool calls. `get_tree` additionally omits any excluded path from its listing, so secret
+filenames are never even enumerated. A content-port failure degrades to a tool refusal rather than
+crashing the review. Reaching a budget marks the context incomplete and stops rather than crawling
+further. Fetched content is returned only as an untrusted tool result and can never change which
+tools exist, the limits, or whether a finding is created.
+
+Because the published summary and finding narrative are model-controlled free text, a filename
+deny-list alone cannot stop an injected instruction from copying a *non*-denylisted file's contents
+into the review. The core therefore also enforces **verification-only output**: after a final review,
+the service checks the summary and every finding's title/explanation against the content actually
+fetched this run and, if any long verbatim span is reproduced, withholds the entire review (partial,
+no findings). The model may read files to judge findings but may not quote them.
 
 The final structured review is delivered through a `submit_review` tool whose input schema is the
 shared `review-v2` schema, so tool use and structured output never conflict. A turn that produces
@@ -46,11 +56,20 @@ behavior. OpenAI ships without an agent-turn adapter and therefore always falls 
 OpenAI agent turn is a follow-up.
 
 Threat model and residual risk: an attacker controlling PR content might try to exfiltrate secrets via
-tool requests, inject instructions through fetched files, or exhaust resources. The core (not the
-model) decides and bounds every fetch; fetched content is untrusted and cannot alter controls or
+tool requests, inject instructions through fetched files, or exhaust resources. Defenses, in order of
+reliance: the core (not the model) decides and bounds every fetch; a case-insensitive secret deny-list
+and a tree-listing filter block obvious secret paths; the verification-only output guard withholds any
+review that reproduces fetched content; fetched content is untrusted and cannot alter controls or
 manufacture findings; tools are read-only with no search primitive; provenance records paths/SHAs
-only; every turn is admission-bounded and ambiguity-safe; and the feature is off by default. Residual
-risk is that fetched content could still mislead the model's judgment — bounded by keeping findings
-diff-anchored and evidence-verified and by surfacing provenance for human audit. Validation for this
-phase is mocked-only (the full traversal/secret/injection/exhaustion matrix plus the agent loop and
-wire format); a live sandbox demonstration is optional and not claimed here.
+only; every turn is admission-bounded and ambiguity-safe; and the feature is off by default and
+triple-gated.
+
+Residual risk, stated honestly: (1) the verbatim-quote guard triggers only on spans at or above the
+shared long-source threshold, so a **short** secret copied into the narrative from a non-denylisted
+file could still slip through — the deny-list is the first line for known-secret files, but a small
+secret in an ordinary config file remains a theoretical exfiltration path; (2) fetched content can
+still mislead the model's judgment, bounded by keeping findings diff-anchored and evidence-verified
+and by surfacing provenance for human audit. These are why agent mode is off by default and gated.
+Validation for this phase is mocked-only (the full traversal/secret/injection/exhaustion matrix, the
+verification-only output guard, the agent loop, the provider wire format, and an end-to-end run
+through the durable generation path); a live sandbox demonstration is optional and not claimed here.

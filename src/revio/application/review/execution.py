@@ -155,7 +155,7 @@ def _source_fragments(files: tuple[DiffFile, ...]) -> tuple[str, ...]:
     )
 
 
-def _contains_long_verbatim_source(
+def contains_long_verbatim_source(
     prose: tuple[str, ...], source_fragments: tuple[str, ...]
 ) -> bool:
     """Detect an exact source/prose match of at least the documented threshold."""
@@ -193,7 +193,7 @@ def build_artifact(
     if provenance is not None and provenance.note():
         summary = f"{summary}\n\n{provenance.note()}"[:8000]
     prose = (summary, *(item.title for item in findings), *(item.explanation for item in findings))
-    if any("```" in value for value in prose) or _contains_long_verbatim_source(
+    if any("```" in value for value in prose) or contains_long_verbatim_source(
         prose, source_fragments
     ):
         summary = CONTENT_LIMIT_SUMMARY
@@ -595,10 +595,12 @@ class ReviewGenerationService:
             )
             for item in accepted[: self._settings.review_max_findings]
         )
+        # Preserve the original diff-only precedence (overflow wins over token reduction) so
+        # non-agent artifacts remain byte-identical; the agent reason is additive.
         reasons: list[PartialReason] = []
         if overflow:
             reasons.append(PartialReason.FINDINGS_TRUNCATED)
-        if token_reduced:
+        elif token_reduced:
             reasons.append(PartialReason.INPUT_TRUNCATED)
         if result.partial:
             reasons.append(PartialReason.AGENT_INCOMPLETE)

@@ -2,10 +2,12 @@
 
 The model never fetches anything itself: it asks, and this executor decides. Every tool call is
 validated and bounded here, in the provider-neutral core, before touching the SCM content port —
-path traversal is rejected, a secret deny-list is enforced, and per-file/aggregate byte and
-tool-call/file-count budgets are capped. Reaching a budget marks the review context incomplete
-rather than crawling further. Fetched content is only ever returned to the model as an untrusted
-tool result; it never changes which tools exist or what is allowed.
+path traversal is rejected, a case-insensitive secret deny-list is enforced, content-port failures
+degrade to a refusal instead of crashing the review, and per-file/aggregate byte and
+tool-call/file-count budgets are capped (tree listings count toward the byte budget too). Reaching a
+budget marks the context incomplete rather than crawling further. Fetched content is only ever
+returned as an untrusted tool result; it never changes which tools exist or what is allowed, and the
+service separately forbids the published review from quoting it.
 """
 
 import fnmatch
@@ -17,32 +19,49 @@ from revio.domain.agent import AgentToolRequest, AgentToolResult
 from revio.domain.models import AgentProvenance, ChangeRequestTarget, ConsultedFile
 from revio.ports.scm import RepositoryContentReadPort
 
-# Paths that are never returned, even when explicitly requested. Matched against the full normalized
-# path and each path segment. Conservative by design: refusing a safe file is acceptable; returning
-# a secret is not.
+# Paths that are never returned, even when explicitly requested. Globs are lower-case and matched
+# case-insensitively against the full normalized path and each segment. Conservative by design:
+# refusing a safe file is acceptable; returning a secret is not.
 DEFAULT_SECRET_GLOBS: tuple[str, ...] = (
     ".env",
     ".env.*",
+    "*.env",
     "*.pem",
     "*.key",
     "*.pfx",
     "*.p12",
+    "*.p8",
     "*.keystore",
     "*.jks",
+    "*.kdbx",
     "id_rsa*",
     "id_dsa*",
     "id_ecdsa*",
     "id_ed25519*",
     "*.ppk",
+    "*.gpg",
+    "*.asc",
+    "*.der",
+    "*.tfstate",
+    "*.tfstate.*",
+    "*.tfvars",
     "credentials*",
+    "secret",
+    "secret.*",
     "secrets*",
+    "kubeconfig",
+    "*.kubeconfig",
     ".npmrc",
     ".pypirc",
     ".netrc",
     ".htpasswd",
+    ".dockercfg",
+    ".git-credentials",
 )
-# Any path with one of these as a segment is refused outright.
-DENY_SEGMENTS: frozenset[str] = frozenset({".git", ".ssh", ".aws", ".gnupg", "secrets"})
+# Any path with one of these as a (case-insensitive) segment is refused outright.
+DENY_SEGMENTS: frozenset[str] = frozenset(
+    {".git", ".ssh", ".aws", ".gnupg", ".gpg", ".kube", ".docker", ".terraform", "secrets"}
+)
 
 
 @dataclass(frozen=True)
@@ -62,11 +81,16 @@ def _new_consulted() -> list[ConsultedFile]:
     return []
 
 
+def _new_str_list() -> list[str]:
+    return []
+
+
 def _safe_path(raw: object) -> str | None:
     """Return a normalized repo-relative path, or None if it is unsafe or malformed."""
     if not isinstance(raw, str) or not raw or len(raw) > 1000:
         return None
-    if "\x00" in raw or any(ord(ch) < 32 for ch in raw):
+    # Reject C0 (incl. NUL), DEL, and C1 control characters.
+    if any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in raw):
         return None
     if "\\" in raw or raw.startswith("/"):
         return None
@@ -79,7 +103,8 @@ def _safe_path(raw: object) -> str | None:
     segments = normalized.split("/")
     if any(segment in {"", "..", "."} for segment in segments):
         return None
-    if any(segment in DENY_SEGMENTS for segment in segments):
+    lowered = {segment.lower() for segment in segments}
+    if lowered & DENY_SEGMENTS:
         return None
     return normalized
 
@@ -87,7 +112,7 @@ def _safe_path(raw: object) -> str | None:
 def _is_excluded(path: str) -> bool:
     candidates = [path, posixpath.basename(path), *path.split("/")]
     return any(
-        fnmatch.fnmatch(candidate, glob)
+        fnmatch.fnmatchcase(candidate.lower(), glob)
         for candidate in candidates
         for glob in DEFAULT_SECRET_GLOBS
     )
@@ -105,10 +130,15 @@ class AgentToolExecutor:
     _bytes: int = 0
     _files: set[str] = field(default_factory=_new_path_set)
     _consulted: list[ConsultedFile] = field(default_factory=_new_consulted)
+    _fetched: list[str] = field(default_factory=_new_str_list)
     _complete: bool = True
 
     def provenance(self) -> AgentProvenance:
         return AgentProvenance(consulted=tuple(self._consulted), complete=self._complete)
+
+    def fetched_contents(self) -> tuple[str, ...]:
+        """File contents returned to the model this run, for the no-quoting exfiltration guard."""
+        return tuple(self._fetched)
 
     @property
     def exhausted(self) -> bool:
@@ -147,7 +177,11 @@ class AgentToolExecutor:
         if path not in self._files and len(self._files) >= self.limits.max_files:
             self._complete = False
             return self._refuse(request, "file budget was exhausted")
-        content = await self.content.get_file(self.target, path, self.ref)
+        try:
+            content = await self.content.get_file(self.target, path, self.ref)
+        except Exception:
+            self._complete = False
+            return self._refuse(request, "file is temporarily unavailable")
         if content is None:
             return self._refuse(request, "file was not found")
         encoded = len(content.encode("utf-8"))
@@ -159,20 +193,32 @@ class AgentToolExecutor:
             return self._refuse(request, "aggregate content budget was exhausted")
         self._bytes += encoded
         self._files.add(path)
+        self._fetched.append(content)
         self._consulted.append(ConsultedFile(path=path, ref=self.ref, kind="get_file"))
         return AgentToolResult(call_id=request.call_id, ok=True, content=content)
 
     async def _get_tree(self, request: AgentToolRequest, path: str) -> AgentToolResult:
-        tree = await self.content.get_tree(self.target, path, self.ref)
+        try:
+            tree = await self.content.get_tree(self.target, path, self.ref)
+        except Exception:
+            self._complete = False
+            return self._refuse(request, "tree is temporarily unavailable")
+        # Never enumerate excluded/secret paths to the model, and bound the listing size.
+        visible = [entry for entry in tree.items if not _is_excluded(entry.path)]
         entries = [
             {"path": entry.path, "type": entry.entry_type}
-            for entry in tree.items[: self.limits.max_tree_entries]
+            for entry in visible[: self.limits.max_tree_entries]
         ]
-        truncated = len(tree.items) > self.limits.max_tree_entries
-        if truncated or not tree.completeness.is_complete:
+        truncated = len(visible) > self.limits.max_tree_entries
+        if truncated or len(visible) != len(tree.items) or not tree.completeness.is_complete:
             self._complete = False
-        self._consulted.append(ConsultedFile(path=path or ".", ref=self.ref, kind="get_tree"))
         body = json.dumps({"entries": entries, "truncated": truncated}, separators=(",", ":"))
+        encoded = len(body.encode("utf-8"))
+        if self._bytes + encoded > self.limits.max_aggregate_bytes:
+            self._complete = False
+            return self._refuse(request, "aggregate content budget was exhausted")
+        self._bytes += encoded
+        self._consulted.append(ConsultedFile(path=path or ".", ref=self.ref, kind="get_tree"))
         return AgentToolResult(call_id=request.call_id, ok=True, content=body)
 
     def _refuse(self, request: AgentToolRequest, reason: str) -> AgentToolResult:

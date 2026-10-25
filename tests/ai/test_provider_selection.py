@@ -31,10 +31,12 @@ def test_unknown_alias_is_rejected() -> None:
 
 def test_orchestration_layer_has_no_provider_name_branch() -> None:
     """Acceptance criterion: no provider identifier appears in the core review path."""
-    root = Path(__file__).resolve().parents[2] / "src" / "revio" / "application" / "review"
+    src = Path(__file__).resolve().parents[2] / "src" / "revio"
+    roots = (src / "application" / "review", src / "domain", src / "ports")
     offenders: list[str] = []
-    for path in sorted(root.glob("*.py")):
-        text = path.read_text(encoding="utf-8").lower()
-        if "anthropic" in text or "openai" in text:
-            offenders.append(path.name)
-    assert offenders == [], f"provider name leaked into orchestration: {offenders}"
+    for root in roots:
+        for path in sorted(root.glob("*.py")):
+            text = path.read_text(encoding="utf-8").lower()
+            if "anthropic" in text or "openai" in text:
+                offenders.append(str(path.relative_to(src)))
+    assert offenders == [], f"provider name leaked into the core: {offenders}"

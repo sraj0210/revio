@@ -161,6 +161,92 @@ async def test_successful_file_records_provenance(target: ChangeRequestTarget) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    ["config.PEM", "deploy/App.Key", "ID_RSA", ".ENV", "Secrets/token", "config/.Git/x"],
+)
+async def test_secret_denylist_is_case_insensitive(target: ChangeRequestTarget, path: str) -> None:
+    content = FakeContent(files={path: "SENSITIVE"})
+    executor = _executor(content, target)
+    (result,) = await executor.execute((_req("get_file", path),))
+    assert result.ok is False
+    assert "SENSITIVE" not in result.content
+    assert content.file_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["prod.env", "infra/main.tfstate", "backup/app.tfvars", "k.gpg"])
+async def test_broadened_secret_globs(target: ChangeRequestTarget, path: str) -> None:
+    content = FakeContent(files={path: "SENSITIVE"})
+    executor = _executor(content, target)
+    (result,) = await executor.execute((_req("get_file", path),))
+    assert result.ok is False
+    assert content.file_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["a\x7fb.py", "c\x85d.py", "e\x9ff.py"])
+async def test_del_and_c1_control_chars_are_refused(target: ChangeRequestTarget, path: str) -> None:
+    content = FakeContent(files={path: "x"})
+    executor = _executor(content, target)
+    (result,) = await executor.execute((_req("get_file", path),))
+    assert result.ok is False
+    assert content.file_calls == []
+
+
+@pytest.mark.asyncio
+async def test_content_port_error_degrades_to_refusal(target: ChangeRequestTarget) -> None:
+    class Raising:
+        async def get_file(self, t: ChangeRequestTarget, path: str, ref: str) -> str | None:
+            raise RuntimeError("upstream exploded")
+
+        async def get_tree(self, t: ChangeRequestTarget, path: str, ref: str) -> TreeCollection:
+            raise RuntimeError("upstream exploded")
+
+    executor = AgentToolExecutor(Raising(), target, "headsha", AgentLimits())  # type: ignore[arg-type]
+    (file_result,) = await executor.execute((_req("get_file", "a.py"),))
+    (tree_result,) = await executor.execute((_req("get_tree", ""),))
+    assert file_result.ok is False and "unavailable" in file_result.content
+    assert tree_result.ok is False and "unavailable" in tree_result.content
+    assert executor.provenance().complete is False
+
+
+@pytest.mark.asyncio
+async def test_get_tree_omits_excluded_paths_and_flags_incomplete(
+    target: ChangeRequestTarget,
+) -> None:
+    tree = TreeCollection(
+        items=(
+            RepositoryEntry(path="src/a.py", entry_type="blob", sha="s1"),
+            RepositoryEntry(path=".env", entry_type="blob", sha="s2"),
+            RepositoryEntry(path="keys/id_rsa", entry_type="blob", sha="s3"),
+        )
+    )
+    executor = _executor(FakeContent(tree=tree), target)
+    (result,) = await executor.execute((_req("get_tree", ""),))
+    assert result.ok is True
+    paths = {entry["path"] for entry in json.loads(result.content)["entries"]}
+    assert paths == {"src/a.py"}  # secret paths are never enumerated to the model
+    assert executor.provenance().complete is False
+
+
+@pytest.mark.asyncio
+async def test_get_tree_counts_bytes_toward_aggregate_budget(
+    target: ChangeRequestTarget,
+) -> None:
+    tree = TreeCollection(
+        items=tuple(
+            RepositoryEntry(path=f"dir/file_{i}.py", entry_type="blob", sha="s") for i in range(50)
+        )
+    )
+    executor = _executor(FakeContent(tree=tree), target, max_aggregate_bytes=50)
+    (result,) = await executor.execute((_req("get_tree", ""),))
+    assert result.ok is False
+    assert "budget" in result.content
+    assert executor.provenance().complete is False
+
+
+@pytest.mark.asyncio
 async def test_tree_lists_entries_and_flags_incompleteness(target: ChangeRequestTarget) -> None:
     tree = TreeCollection(
         items=(

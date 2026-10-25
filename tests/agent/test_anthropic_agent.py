@@ -131,6 +131,66 @@ async def test_refusal_turn_is_observed_terminal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_real_multi_turn_round_trip_carries_conversation() -> None:
+    # Turn 1 asks for a file; after append_tool_results, turn 2 submits the review. Assert the grown
+    # conversation (assistant tool_use + user tool_result) is carried into the second request.
+    calls: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = cast(dict[str, Any], _json.loads(request.content))
+        calls.append(body)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "stop_reason": "tool_use",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "get_file",
+                            "input": {"path": "a.py"},
+                        }
+                    ],
+                    "usage": {"input_tokens": 5, "output_tokens": 2},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_2",
+                        "name": "submit_review",
+                        "input": {"summary": "ok", "findings": []},
+                    }
+                ],
+                "usage": {"input_tokens": 9, "output_tokens": 3},
+            },
+        )
+
+    adapter = _adapter(handler)
+    turn1 = await adapter.agent_turn(_payload())
+    assert turn1.tool_calls[0].call_id == "toolu_1"
+    results = (AgentToolResult(call_id="toolu_1", ok=True, content="def f(): pass"),)
+    next_payload = adapter.append_tool_results(turn1.payload, results)
+    turn2 = await adapter.agent_turn(next_payload)
+    assert turn2.final_review is not None and turn2.final_review.summary == "ok"
+    # The second request's messages must include the assistant tool_use and the user tool_result.
+    second_messages = cast(list[dict[str, Any]], calls[1]["messages"])
+    roles = [m["role"] for m in second_messages]
+    assert roles == ["user", "assistant", "user"]
+    tool_result_block = cast(list[dict[str, Any]], second_messages[2]["content"])[0]
+    assert tool_result_block["tool_use_id"] == "toolu_1"
+    assert tool_result_block["content"] == "def f(): pass"
+    await adapter.close()
+
+
+@pytest.mark.asyncio
 async def test_append_tool_results_builds_tool_result_message() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={})

@@ -96,6 +96,7 @@ def select_reviewer(
                 max_files=settings.review_agent_max_files,
                 max_bytes_per_file=settings.review_agent_max_bytes_per_file,
                 max_aggregate_bytes=settings.review_agent_max_aggregate_bytes,
+                max_tree_entries=settings.review_agent_max_tree_entries,
             ),
             max_turns=settings.review_agent_max_turns,
         )

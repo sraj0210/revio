@@ -39,8 +39,10 @@ class ReviewSettings(BaseSettings):
     review_agent_max_turns: int = Field(default=10, gt=0, le=50)
     review_agent_max_tool_calls: int = Field(default=8, gt=0, le=50)
     review_agent_max_files: int = Field(default=10, gt=0, le=100)
-    review_agent_max_bytes_per_file: int = Field(default=65_536, gt=0, le=1_048_576)
+    # Capped at the AgentToolResult.content bound so an admitted file can always be returned.
+    review_agent_max_bytes_per_file: int = Field(default=65_536, gt=0, le=200_000)
     review_agent_max_aggregate_bytes: int = Field(default=262_144, gt=0, le=4_194_304)
+    review_agent_max_tree_entries: int = Field(default=500, gt=0, le=5_000)
     # Phase 7: production publishing is unlocked only by an explicit, non-defaulted acknowledgement
     # together with the preconditions enforced below. It is fail-closed.
     production_publish_confirmed: bool = False
@@ -69,6 +71,8 @@ class ReviewSettings(BaseSettings):
     def validate_review(self) -> Self:
         if self.review_publish_enabled and not self.review_enabled:
             raise ValueError("publishing requires review execution")
+        if self.review_agent_max_bytes_per_file > self.review_agent_max_aggregate_bytes:
+            raise ValueError("agent per-file byte limit cannot exceed the aggregate byte limit")
         if self.environment == "production" and self.review_publish_enabled:
             # Fail-closed production-publishing gate: every precondition must hold.
             if not self.production_publish_confirmed:

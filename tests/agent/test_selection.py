@@ -28,14 +28,16 @@ def _adapter() -> AnthropicReviewAdapter:
     )
 
 
-def _bundle(*, file_access: bool = True, tree_access: bool = True) -> SCMAdapterBundle:
+def _bundle(
+    *, file_access: bool = True, tree_access: bool = True, content: bool = True
+) -> SCMAdapterBundle:
     class _Reader:
         pass
 
     return SCMAdapterBundle(
         reader=_Reader(),  # type: ignore[arg-type]
         capabilities=SCMCapabilities(repository_file_access=file_access, tree_access=tree_access),
-        repository_content=FakeContent({}),  # type: ignore[arg-type]
+        repository_content=FakeContent({}) if content else None,  # type: ignore[arg-type]
     )
 
 
@@ -75,6 +77,22 @@ def test_scm_without_file_access_stays_diff_only() -> None:
     adapter = _adapter()
     reviewer = select_reviewer(
         adapter, anthropic_agent_model_profile(), _settings(agent=True), _bundle(file_access=False)
+    )
+    assert reviewer is adapter
+
+
+def test_scm_without_tree_access_stays_diff_only() -> None:
+    adapter = _adapter()
+    reviewer = select_reviewer(
+        adapter, anthropic_agent_model_profile(), _settings(agent=True), _bundle(tree_access=False)
+    )
+    assert reviewer is adapter
+
+
+def test_none_content_port_stays_diff_only() -> None:
+    adapter = _adapter()
+    reviewer = select_reviewer(
+        adapter, anthropic_agent_model_profile(), _settings(agent=True), _bundle(content=False)
     )
     assert reviewer is adapter
 
@@ -128,3 +146,17 @@ def test_diff_only_artifact_digest_is_unchanged_without_provenance() -> None:
         provenance=None,
     )
     assert without.digest == also_without.digest
+    # Provenance with consulted files must change the digest (it is part of the artifact identity).
+    with_provenance = build_artifact(
+        run_id="run-2",
+        profile=anthropic_model_profile(),
+        summary="No issues.",
+        findings=(),
+        partial=False,
+        reasons=(),
+        now=now,
+        provenance=AgentProvenance(
+            consulted=(ConsultedFile(path="a.py", ref="headsha", kind="get_file"),)
+        ),
+    )
+    assert with_provenance.digest != without.digest

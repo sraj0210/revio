@@ -8,12 +8,18 @@ from revio.domain.agent import AgentToolRequest, AgentTurnResult
 from revio.domain.models import (
     ChangeRequest,
     ChangeRequestTarget,
+    Finding,
+    FindingIdentity,
     ReviewRequest,
     ReviewResult,
     TokenUsage,
     TreeCollection,
 )
-from revio.errors import MalformedProviderOutputError, ProviderCallAmbiguousError
+from revio.errors import (
+    MalformedProviderOutputError,
+    ProviderCallAmbiguousError,
+    ProviderCallObservedTerminalError,
+)
 
 
 class FakeContent:
@@ -61,9 +67,25 @@ def _request(change_request: ChangeRequest) -> ReviewRequest:
 
 
 def _service(
-    adapter: FakeAgentAdapter, content: FakeContent, *, max_turns: int = 4
+    adapter: FakeAgentAdapter,
+    content: FakeContent,
+    *,
+    max_turns: int = 4,
+    limits: AgentLimits | None = None,
 ) -> AgentReviewService:
-    return AgentReviewService(adapter, content, limits=AgentLimits(), max_turns=max_turns)
+    return AgentReviewService(adapter, content, limits=limits or AgentLimits(), max_turns=max_turns)
+
+
+def make_finding(confidence: float = 0.9) -> Finding:
+    return Finding(
+        category="correctness",
+        title="Bug",
+        explanation="Off by one.",
+        confidence=confidence,
+        path="a.py",
+        line=1,
+        identity=FindingIdentity(rule="off-by-one", symbol="f", evidence="bad()"),
+    )
 
 
 @pytest.mark.asyncio
@@ -129,3 +151,79 @@ async def test_ambiguous_turn_propagates_and_does_not_retransmit(
     with pytest.raises(ProviderCallAmbiguousError):
         await service.generate_preflighted(payload)
     assert adapter.index == 1  # the ambiguous turn was never retried
+
+
+@pytest.mark.asyncio
+async def test_review_quoting_fetched_content_is_withheld(change_request: ChangeRequest) -> None:
+    secret = "X" * 200  # a long verbatim span the model copies out of a fetched file
+    turns: list[AgentTurnResult | Exception] = [
+        AgentTurnResult(
+            tool_calls=(
+                AgentToolRequest(call_id="t1", name="get_file", arguments={"path": "a.py"}),
+            ),
+            usage=TokenUsage(output_tokens=1),
+            payload={"messages": []},
+        ),
+        AgentTurnResult(
+            final_review=ReviewResult(findings=(make_finding(),), summary=secret),
+            usage=TokenUsage(output_tokens=1),
+        ),
+    ]
+    service = _service(FakeAgentAdapter(turns), FakeContent({"a.py": secret}))
+    payload = await service.preflight(_request(change_request))
+    result = await service.generate_preflighted(payload)
+    assert result.findings == ()  # the whole review is withheld, not just scrubbed
+    assert "X" * 160 not in result.summary
+    assert result.partial is True
+
+
+@pytest.mark.asyncio
+async def test_converged_keeps_findings_under_incomplete_context(
+    change_request: ChangeRequest,
+) -> None:
+    # Turn 1 requests a file that exceeds the per-file byte budget -> refused, context incomplete.
+    turns: list[AgentTurnResult | Exception] = [
+        AgentTurnResult(
+            tool_calls=(
+                AgentToolRequest(call_id="t1", name="get_file", arguments={"path": "big.py"}),
+            ),
+            usage=TokenUsage(output_tokens=1),
+            payload={"messages": []},
+        ),
+        AgentTurnResult(
+            final_review=ReviewResult(findings=(make_finding(),), summary="One issue."),
+            usage=TokenUsage(output_tokens=1),
+        ),
+    ]
+    service = _service(
+        FakeAgentAdapter(turns),
+        FakeContent({"big.py": "y" * 100}),
+        limits=AgentLimits(max_bytes_per_file=10),
+    )
+    payload = await service.preflight(_request(change_request))
+    result = await service.generate_preflighted(payload)
+    assert result.partial is False  # a converged review stands
+    assert len(result.findings) == 1  # findings are kept under limited context
+    assert result.provenance is not None and result.provenance.complete is False
+
+
+@pytest.mark.asyncio
+async def test_usage_is_accumulated_when_a_later_turn_is_terminal(
+    change_request: ChangeRequest,
+) -> None:
+    turns: list[AgentTurnResult | Exception] = [
+        AgentTurnResult(
+            tool_calls=(AgentToolRequest(call_id="t", name="get_tree", arguments={"path": ""}),),
+            usage=TokenUsage(output_tokens=3),
+            payload={"messages": []},
+        ),
+        ProviderCallObservedTerminalError(
+            "stopped", usage=TokenUsage(output_tokens=5), reason="max_tokens"
+        ),
+    ]
+    service = _service(FakeAgentAdapter(turns), FakeContent({}))
+    payload = await service.preflight(_request(change_request))
+    with pytest.raises(ProviderCallObservedTerminalError) as excinfo:
+        await service.generate_preflighted(payload)
+    assert isinstance(excinfo.value.usage, TokenUsage)
+    assert excinfo.value.usage.output_tokens == 8  # 3 (turn 1) + 5 (terminal turn)
