@@ -1,6 +1,6 @@
 # Revio
 
-Revio is a provider-neutral code-review platform. Phase 5 adds trusted-base repository configuration and administrator-controlled rollout to the durable Anthropic diff-only review path.
+Revio is a provider-neutral, self-hostable AI code-review service. It reviews GitHub pull requests with Anthropic, deduplicates and conservatively manages prior findings, and ships the single-node production MVP: structured logs, low-cardinality metrics, rate and resource limits, and a fail-closed production-publishing gate.
 
 The approved architecture and phased roadmap are documented in [the implementation plan](docs/architecture/implementation-plan.md).
 
@@ -22,11 +22,19 @@ The approved architecture and phased roadmap are documented in [the implementati
 - Reconciled GitHub Check Runs and one non-blocking `COMMENT` review in sandbox mode
 - Strict, versioned `.revio.yml` policy loaded only from the exact pull-request base commit
 - Stable-ID rollout, administrator-protected exclusions, opt-out policy, and durable resolution reuse
-- Offline terminal-history retention with permanent delivery tombstones
+- Versioned finding identity and length-framed primary/secondary fingerprints that exclude generated prose
+- Exact deduplication: exact primary-fingerprint matches are never reposted; all-duplicate runs post no review
+- Deterministic bounded prior selection (at most 25), exact-latest-head evidence collection, and three-state (`fixed`/`still_present`/`uncertain`) revalidation through a distinct, ambiguity-safe provider call
+- Per-finding hidden markers, adapter-private GitHub GraphQL review-thread discovery, and ambiguity-safe `resolveReviewThread` resolution that resolves only confirmed-fixed linked threads
+- Offline terminal-history and 180-day closed-finding retention with permanent delivery tombstones
+- Structured JSON logging with defensive secret/content redaction
+- A low-cardinality Prometheus `/metrics` exporter served only on a separate internal bind
+- Per-source webhook ingress rate limiting and graceful shutdown
+- A fail-closed production-publishing enablement gate
 - Local development and container tooling
 - Automated formatting, linting, type checking, and tests
 
-`/health` intentionally checks process liveness only. `/ready` checks the mandatory SQLite 3.35 capability, migration revision, foreign keys, and delivery/tombstone integrity.
+`/health` intentionally checks process liveness only. `/ready` checks the mandatory SQLite 3.35 capability, migration revision, foreign keys, delivery/tombstone integrity, and finding-lifecycle integrity.
 
 ## Requirements
 
@@ -84,7 +92,7 @@ Exactly one worker process is enforced by a process-lifetime lock next to the SQ
 database. `revio-worker check-ready` is a pre-start check; a running worker exposes
 the separate `revio-worker health` command for container health checks.
 
-Publishing remains forbidden at production startup. Finding lifecycle, a second AI provider, PostgreSQL, Redis, and multiple workers remain out of scope.
+Production publishing is unlocked only by a fail-closed gate: in `production` it requires an explicit `REVIO_PRODUCTION_PUBLISH_CONFIRMED`, a non-empty rollout allow-list, and file-based secret sources; any missing precondition rejects startup. Observability is operator-configured: JSON logs to stdout and a Prometheus `/metrics` endpoint served only on a separate internal bind (`REVIO_METRICS_BIND`), never on the public webhook listener. A second AI provider (OpenAI), additional SCM providers (GitLab, Bitbucket), PostgreSQL, Redis, multiple workers, and agent mode remain out of scope; see the [implementation plan](docs/architecture/implementation-plan.md) for the phased roadmap.
 
 When `REVIO_GITHUB_ENABLED=true`, application bootstrap validates the RSA key and registers the GitHub read and repository-content ports. Operational worker readiness requires this adapter. An intentionally idle local-development worker additionally requires `REVIO_GITHUB_ALLOW_IDLE_WORKER=true`; production and durable modes reject it. The sandbox CLI uses the same adapter-private composition factory. Changed-file and tree output includes explicit completeness values; any value other than `complete` is partial and must not be interpreted as a complete repository view.
 
