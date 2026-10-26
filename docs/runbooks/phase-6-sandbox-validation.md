@@ -1,6 +1,6 @@
 # Phase 6 sandbox validation — deduplication and finding lifecycle
 
-Use only `sraj0210/revio-phase4-sandbox` and the dedicated **Revio Phase 4 Sandbox** GitHub App
+Use only `sraj0210/venaroq-phase4-sandbox` and the dedicated **Venaroq Phase 4 Sandbox** GitHub App
 (App ID `5450619`, installation `174693302`, repository `1328857147`, stable identity
 `github:174693302:1328857147`). Never use a production repository and never enable production
 publishing.

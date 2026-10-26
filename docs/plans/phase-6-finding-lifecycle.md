@@ -485,7 +485,7 @@ Deletion of GitHub comments or reviews is not implemented.
 
 ## 18. Manual sandbox validation
 
-Use only `sraj0210/revio-phase4-sandbox` and the dedicated GitHub App.
+Use only `sraj0210/venaroq-phase4-sandbox` and the dedicated GitHub App.
 
 1. Create a synthetic PR that produces one inline lifecycle-capable finding; record its fingerprint,
    marker, review ID, thread ID, and open state without exposing evidence content.
