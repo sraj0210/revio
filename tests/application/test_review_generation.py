@@ -314,6 +314,50 @@ async def test_ambiguous_repair_is_never_retransmitted_after_restart(
     ]
 
 
+@pytest.mark.asyncio
+async def test_provider_failures_are_logged_with_content_free_codes(
+    alembic_database: AlembicDatabase,
+    change_request: ChangeRequest,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = alembic_database.store()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await _run(store, now)
+
+    class Reviewer(AmbiguousReviewer):
+        async def generate_preflighted(self, payload: dict[str, object]) -> ReviewResult:
+            self.generations += 1
+            if self.generations == 1:
+                raise MalformedProviderOutputError(
+                    "malformed SECRET-MODEL-OUTPUT",
+                    usage=TokenUsage(output_tokens=1),
+                    detail="schema_invalid:findings:missing",
+                )
+            raise ProviderCallAmbiguousError("repair lost", cause="timeout")
+
+    service = ReviewGenerationService(
+        store.reviews, Reviewer(), ReviewSettings(review_enabled=True)
+    )
+    with caplog.at_level("WARNING", logger="venaroq.application.review.execution"):
+        await service.generate(
+            run_id="run",
+            change_request=change_request,
+            diff=_diff(),
+            profile=anthropic_model_profile(),
+            now=now,
+        )
+    events = [
+        (r.getMessage(), getattr(r, "call_kind", None), getattr(r, "outcome", None))
+        for r in caplog.records
+    ]
+    assert events == [
+        ("provider_output_invalid", "initial", "schema_invalid:findings:missing"),
+        ("provider_call_ambiguous", "repair", "timeout"),
+    ]
+    assert all(getattr(r, "review_run_id", None) == "run" for r in caplog.records)
+    assert "SECRET-MODEL-OUTPUT" not in caplog.text
+
+
 def _diff() -> DiffCollection:
     return DiffCollection(
         items=(

@@ -134,9 +134,39 @@ async def test_messages_timeout_is_ambiguous(change_request: ChangeRequest) -> N
         diff_files=(),
         model_profile=anthropic_model_profile(),
     )
-    with pytest.raises(ProviderCallAmbiguousError):
+    with pytest.raises(ProviderCallAmbiguousError) as raised:
         await adapter.review(request)
+    assert raised.value.cause == "timeout"
     assert calls == 2
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_messages_server_error_is_ambiguous_with_status_cause(
+    change_request: ChangeRequest,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("count_tokens"):
+            return httpx.Response(200, json={"input_tokens": 1})
+        return httpx.Response(503, json={"type": "error"})
+
+    http = httpx.AsyncClient(
+        base_url="https://api.anthropic.com", transport=httpx.MockTransport(handler)
+    )
+    adapter = AnthropicReviewAdapter(
+        AnthropicSettings(anthropic_enabled=True, anthropic_api_key=SecretStr("secret")),
+        ReviewSettings(review_enabled=True),
+        http=http,
+    )
+    request = ReviewRequest(
+        change_request=change_request,
+        diff_files=(),
+        model_profile=anthropic_model_profile(),
+    )
+    with pytest.raises(ProviderCallAmbiguousError) as raised:
+        await adapter.review(request)
+    # A provider 5xx must be distinguishable from a client-side timeout.
+    assert raised.value.cause == "server_error_503"
     await http.aclose()
 
 

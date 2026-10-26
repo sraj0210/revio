@@ -8,6 +8,7 @@ findings and never performs an unsafe repeated external write.
 """
 
 import hashlib
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -74,6 +75,8 @@ from venaroq.ports.scm import (
     ThreadReaderPort,
     ThreadResolverPort,
 )
+
+logger = logging.getLogger(__name__)
 
 SELECTION_LIMIT = 25
 PER_FILE_BYTE_LIMIT = 128 * 1024
@@ -1023,7 +1026,16 @@ class FindingLifecycleService:
                 now,
             )
             raise
-        except ProviderCallAmbiguousError:
+        except ProviderCallAmbiguousError as error:
+            logger.warning(
+                "provider_call_ambiguous",
+                extra={
+                    "review_run_id": run_id,
+                    "provider_id": str(profile.provider_id),
+                    "call_kind": "revalidation",
+                    "outcome": error.cause,
+                },
+            )
             await self._repository.transition_revalidation_call(
                 call.identity.id,
                 RevalidationCallState.ATTEMPT_STARTED,
@@ -1068,6 +1080,15 @@ class FindingLifecycleService:
             )
             return
         except MalformedProviderOutputError as error:
+            logger.warning(
+                "provider_output_invalid",
+                extra={
+                    "review_run_id": run_id,
+                    "provider_id": str(profile.provider_id),
+                    "call_kind": "revalidation",
+                    "outcome": error.detail,
+                },
+            )
             usage = error.usage if isinstance(error.usage, TokenUsage) else None
             if usage is None:
                 raise RuntimeError("malformed revalidation output lacked usage") from None

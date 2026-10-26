@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Protocol
@@ -39,6 +40,8 @@ from venaroq.errors import (
     ProviderCallTerminalError,
 )
 from venaroq.ports.persistence import ReviewRepository
+
+logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "review-v2"
 SCHEMA_VERSION = "review-v2"
@@ -463,6 +466,15 @@ class ReviewGenerationService:
         try:
             result = await self._reviewer.generate_preflighted(payload)
         except MalformedProviderOutputError as error:
+            logger.warning(
+                "provider_output_invalid",
+                extra={
+                    "review_run_id": run_id,
+                    "provider_id": str(profile.provider_id),
+                    "call_kind": "initial",
+                    "outcome": error.detail,
+                },
+            )
             if not isinstance(error.usage, TokenUsage):
                 raise RuntimeError("malformed output lacked normalized usage") from None
             await self._repository.transition_call(
@@ -485,7 +497,16 @@ class ReviewGenerationService:
                 source_fragments=source_fragments,
                 now=current_time,
             )
-        except ProviderCallAmbiguousError:
+        except ProviderCallAmbiguousError as error:
+            logger.warning(
+                "provider_call_ambiguous",
+                extra={
+                    "review_run_id": run_id,
+                    "provider_id": str(profile.provider_id),
+                    "call_kind": "initial",
+                    "outcome": error.cause,
+                },
+            )
             await self._repository.transition_call(
                 call.identity.id,
                 ProviderCallState.ATTEMPT_STARTED,
@@ -734,7 +755,16 @@ class ReviewGenerationService:
                 now,
             )
             raise
-        except ProviderCallAmbiguousError:
+        except ProviderCallAmbiguousError as error:
+            logger.warning(
+                "provider_call_ambiguous",
+                extra={
+                    "review_run_id": run_id,
+                    "provider_id": str(profile.provider_id),
+                    "call_kind": "repair",
+                    "outcome": error.cause,
+                },
+            )
             await self._repository.transition_call(
                 call.identity.id,
                 ProviderCallState.ATTEMPT_STARTED,
@@ -800,6 +830,15 @@ class ReviewGenerationService:
                 raise RuntimeError("observed invalid repair could not complete") from None
             return artifact
         except MalformedProviderOutputError as error:
+            logger.warning(
+                "provider_output_invalid",
+                extra={
+                    "review_run_id": run_id,
+                    "provider_id": str(profile.provider_id),
+                    "call_kind": "repair",
+                    "outcome": error.detail,
+                },
+            )
             if not isinstance(error.usage, TokenUsage):
                 raise RuntimeError("repair output lacked normalized usage") from None
             await self._repository.transition_call(

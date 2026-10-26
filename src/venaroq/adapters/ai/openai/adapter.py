@@ -14,6 +14,7 @@ from typing import Any, cast
 import httpx
 from pydantic import ValidationError
 
+from venaroq.adapters.ai.http_errors import ambiguous_cause
 from venaroq.adapters.ai.review_schema import (
     REVALIDATION_JSON_SCHEMA,
     REVALIDATION_SYSTEM_PROMPT,
@@ -25,6 +26,7 @@ from venaroq.adapters.ai.review_schema import (
     build_review_result,
     serialize_revalidation_content,
     serialize_review_content,
+    validation_detail,
 )
 from venaroq.config.openai import OpenAISettings
 from venaroq.config.review import ReviewSettings
@@ -168,8 +170,10 @@ class OpenAIReviewAdapter:
             httpx.WriteError,
             httpx.ReadError,
             httpx.RemoteProtocolError,
-        ):
-            raise ProviderCallAmbiguousError("OpenAI Responses outcome is ambiguous") from None
+        ) as error:
+            raise ProviderCallAmbiguousError(
+                "OpenAI Responses outcome is ambiguous", cause=ambiguous_cause(error)
+            ) from None
         if response.status_code == 429:
             retry_after = response.headers.get("retry-after")
             try:
@@ -181,7 +185,10 @@ class OpenAIReviewAdapter:
                 retry_after_seconds=retry_seconds,
             )
         if response.status_code >= 500:
-            raise ProviderCallAmbiguousError("OpenAI Responses outcome is ambiguous")
+            raise ProviderCallAmbiguousError(
+                "OpenAI Responses outcome is ambiguous",
+                cause=ambiguous_cause(status_code=response.status_code),
+            )
         if response.status_code >= 400:
             raise ProviderCallTerminalError("OpenAI Responses request was rejected")
         return response
@@ -264,14 +271,16 @@ class OpenAIReviewAdapter:
             ProviderCallObservedInvalidResponseError,
         ):
             raise
-        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
             observed_usage = locals().get("usage")
             if not isinstance(observed_usage, TokenUsage):
                 raise ProviderCallObservedInvalidResponseError(
                     "OpenAI 2xx Responses output could not be normalized"
                 ) from None
             raise MalformedProviderOutputError(
-                "OpenAI response failed local validation", usage=observed_usage
+                "OpenAI response failed local validation",
+                usage=observed_usage,
+                detail=validation_detail(error),
             ) from None
         return build_review_result(parsed, usage)
 
@@ -323,13 +332,15 @@ class OpenAIReviewAdapter:
             ProviderCallObservedInvalidResponseError,
         ):
             raise
-        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
             observed_usage = locals().get("usage")
             if not isinstance(observed_usage, TokenUsage):
                 raise ProviderCallObservedInvalidResponseError(
                     "OpenAI 2xx revalidation output could not be normalized"
                 ) from None
             raise MalformedProviderOutputError(
-                "OpenAI revalidation response failed local validation", usage=observed_usage
+                "OpenAI revalidation response failed local validation",
+                usage=observed_usage,
+                detail=validation_detail(error),
             ) from None
         return build_revalidation_result(parsed, usage)

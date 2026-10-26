@@ -82,7 +82,15 @@ class ProviderTransientError(VenaroqError):
 
 
 class ProviderCallAmbiguousError(VenaroqError):
-    """A provider call may have been accepted without a trustworthy response."""
+    """A provider call may have been accepted without a trustworthy response.
+
+    ``cause`` is a short, content-free code (``timeout``, ``read_error``, ``server_error_503``, ...)
+    so operators can tell a client-side timeout from a provider outage.
+    """
+
+    def __init__(self, message: str, *, cause: str = "unspecified") -> None:
+        super().__init__(message)
+        self.cause = cause
 
 
 class ProviderCallRejectedError(VenaroqError):
@@ -111,11 +119,16 @@ class ProviderCallObservedInvalidResponseError(VenaroqError):
 
 
 class MalformedProviderOutputError(VenaroqError):
-    """A trustworthy provider response failed local semantic validation."""
+    """A trustworthy provider response failed local semantic validation.
 
-    def __init__(self, message: str, *, usage: object) -> None:
+    ``detail`` is a short, content-free code naming *why* (for example
+    ``schema_invalid:findings:missing`` or ``text_reply_not_json``); it never carries model output.
+    """
+
+    def __init__(self, message: str, *, usage: object, detail: str = "unspecified") -> None:
         super().__init__(message)
         self.usage = usage
+        self.detail = detail
 
 
 class ReconciliationIntegrityError(VenaroqError):

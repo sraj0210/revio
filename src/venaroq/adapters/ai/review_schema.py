@@ -9,6 +9,7 @@ contract cannot drift between providers.
 """
 
 import json
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -173,6 +174,43 @@ REVALIDATION_JSON_SCHEMA: dict[str, Any] = {
     },
     "required": ["results"],
 }
+
+
+class OutputShapeError(ValueError):
+    """Provider output has the wrong shape (for example no review text); ``code`` names how."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+_SAFE_LOC_PART = re.compile(r"[a-z_][a-z0-9_]{0,40}")
+
+
+def validation_detail(error: BaseException) -> str:
+    """A short, content-free code for why provider output failed local validation.
+
+    Built only from schema field names, list indexes, and pydantic error types: never from the
+    model's output, so it is safe to log. Location parts outside the known-identifier shape (for
+    example an unexpected key the model invented) are masked.
+    """
+    if isinstance(error, OutputShapeError):
+        return error.code
+    if isinstance(error, ValidationError):
+        first = error.errors(include_url=False, include_input=False, include_context=False)[0]
+        parts = [
+            str(part) if isinstance(part, int) or _SAFE_LOC_PART.fullmatch(str(part)) else "?"
+            for part in first["loc"]
+        ]
+        location = ".".join(parts) or "root"
+        return f"schema_invalid:{location}:{first['type']}"[:120]
+    if isinstance(error, json.JSONDecodeError):
+        return "text_reply_not_json"
+    if isinstance(error, KeyError):
+        return "response_missing_field"
+    if isinstance(error, TypeError):
+        return "response_wrong_type"
+    return "unparseable_response"
 
 
 def safe_identity(identity: IdentityDTO) -> FindingIdentity | None:

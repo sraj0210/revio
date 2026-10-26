@@ -15,9 +15,15 @@ from venaroq.adapters.scm.github.webhook.normalizer import normalize_webhook
 from venaroq.config.database import DatabaseSettings
 
 
+def _config() -> Config:
+    config = Config("alembic.ini")
+    config.attributes["configure_logger"] = False  # keep pytest's log capture intact
+    return config
+
+
 def _upgrade(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VENAROQ_DATABASE_PATH", str(path))
-    command.upgrade(Config("alembic.ini"), "head")
+    command.upgrade(_config(), "head")
 
 
 def _objects(path: Path) -> list[tuple[str, str, str]]:
@@ -119,7 +125,7 @@ def test_minimum_sqlite_capability_and_destructive_downgrade_refusal(
     path = tmp_path / "venaroq.db"
     _upgrade(path, monkeypatch)
     with pytest.raises(RuntimeError, match="downgrade is unsupported"):
-        command.downgrade(Config("alembic.ini"), "base")
+        command.downgrade(_config(), "base")
 
 
 @pytest.mark.asyncio

@@ -162,9 +162,9 @@ def build_review_case(provider: str, mode: str) -> ReviewCase:
                 request = request.model_copy(update={"diff_files": request.diff_files[:-1]})
         try:
             result = await reviewer.generate_preflighted(payload)
-        except MalformedProviderOutputError:
+        except MalformedProviderOutputError as error:
             # Production repairs once, but even a successful repair publishes no findings.
-            return ReviewOutcome(withheld_reason="output_invalid")
+            return ReviewOutcome(withheld_reason=f"output_invalid:{error.detail}")
         except (ProviderCallObservedTerminalError, ProviderCallObservedInvalidResponseError):
             return ReviewOutcome(withheld_reason="provider_unusable_output")
         return published_outcome(result, review_settings, token_reduced=token_reduced)
