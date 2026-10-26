@@ -2,7 +2,7 @@
 
 **Self-hostable AI code review for GitHub pull requests — powered by Claude or GPT, and built to stay quiet, safe, and yours.**
 
-[![CI](https://github.com/sraj0210/venaroq/actions/workflows/ci.yml/badge.svg)](https://github.com/sraj0210/venaroq/actions/workflows/ci.yml)
+[![CI](https://github.com/venaroq/venaroq/actions/workflows/ci.yml/badge.svg)](https://github.com/venaroq/venaroq/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 
@@ -65,7 +65,7 @@ a crash or timeout can never create a duplicate review.
 ### 1. Run the service
 
 ```bash
-git clone https://github.com/sraj0210/venaroq.git
+git clone https://github.com/venaroq/venaroq.git
 cd venaroq
 docker compose up --build
 ```
