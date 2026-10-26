@@ -1,0 +1,56 @@
+{
+  "id": "ctx-crossfile-argument-order",
+  "description": "Positional arguments swapped relative to charge()'s signature in another file (currency first).",
+  "requires_context": true,
+  "change_request": {
+    "title": "Complete checkout",
+    "description": "Charge the order total at checkout."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/checkout.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 4,
+          "old_line": 4
+        },
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 5,
+          "old_line": 5
+        },
+        {
+          "content": "def complete_checkout(order) -> str:",
+          "side": "new",
+          "new_line": 6
+        },
+        {
+          "content": "    total = Decimal(order.total)",
+          "side": "new",
+          "new_line": 7
+        },
+        {
+          "content": "    return charge(total, order.currency, idempotency_key=order.id)",
+          "side": "new",
+          "new_line": 8
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/payments.py": "from decimal import Decimal\n\n\ndef charge(currency: str, amount: Decimal, *, idempotency_key: str) -> str:\n    \"\"\"Charge ``amount`` in ``currency``. Returns the charge id.\"\"\"\n    raise NotImplementedError\n",
+    "app/checkout.py": "from decimal import Decimal\n\nfrom app.payments import charge\n\n\ndef complete_checkout(order) -> str:\n    total = Decimal(order.total)\n    return charge(total, order.currency, idempotency_key=order.id)\n"
+  },
+  "labels": [
+    {
+      "path": "app/checkout.py",
+      "line": 8,
+      "category": "correctness",
+      "note": "amount and currency swapped vs charge(currency, amount)"
+    }
+  ]
+}

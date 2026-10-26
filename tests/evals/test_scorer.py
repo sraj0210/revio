@@ -64,3 +64,15 @@ def test_unanchored_findings_are_counted_not_dropped() -> None:
     assert report.clean_unanchored_findings == 1
     # Still not a false positive / false alarm by definition.
     assert report.clean_false_alarm_rate == 0.0
+
+
+def test_per_case_tally_identifies_the_cases_behind_a_metric() -> None:
+    results = [
+        _run(0, "hit", False, [FindingLite(path="a.py", line=10)], [Label(path="a.py", line=10)]),
+        _run(0, "noisy-clean", True, [FindingLite(path="z.py", line=1)], []),
+    ]
+    report = score(results, provider="x", mode="y", repeats=1, settings=MatchSettings())
+    assert report.by_case["hit"].perfect
+    noisy = report.by_case["noisy-clean"]
+    assert not noisy.perfect
+    assert noisy.false_positive_findings == 1

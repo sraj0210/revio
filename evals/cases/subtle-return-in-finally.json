@@ -1,0 +1,80 @@
+{
+  "id": "subtle-return-in-finally",
+  "description": "return inside finally overrides the successful return and swallows every exception, so the function always returns None after the first attempt.",
+  "requires_context": false,
+  "change_request": {
+    "title": "Retry fetch on timeout",
+    "description": "Retry transient timeouts up to three times."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/retry.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 4,
+          "old_line": 4
+        },
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 5,
+          "old_line": 5
+        },
+        {
+          "content": "def fetch_with_retry(fetch, attempts: int = 3):",
+          "side": "new",
+          "new_line": 6
+        },
+        {
+          "content": "    for attempt in range(attempts):",
+          "side": "new",
+          "new_line": 7
+        },
+        {
+          "content": "        try:",
+          "side": "new",
+          "new_line": 8
+        },
+        {
+          "content": "            return fetch()",
+          "side": "new",
+          "new_line": 9
+        },
+        {
+          "content": "        except TimeoutError:",
+          "side": "new",
+          "new_line": 10
+        },
+        {
+          "content": "            log.warning(\"fetch timed out (attempt %d)\", attempt + 1)",
+          "side": "new",
+          "new_line": 11
+        },
+        {
+          "content": "        finally:",
+          "side": "new",
+          "new_line": 12
+        },
+        {
+          "content": "            return None",
+          "side": "new",
+          "new_line": 13
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/retry.py": "import logging\n\nlog = logging.getLogger(__name__)\n\n\ndef fetch_with_retry(fetch, attempts: int = 3):\n    for attempt in range(attempts):\n        try:\n            return fetch()\n        except TimeoutError:\n            log.warning(\"fetch timed out (attempt %d)\", attempt + 1)\n        finally:\n            return None\n"
+  },
+  "labels": [
+    {
+      "path": "app/retry.py",
+      "line": 13,
+      "category": "correctness",
+      "note": "return in finally discards the result and suppresses exceptions"
+    }
+  ]
+}

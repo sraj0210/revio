@@ -1,0 +1,56 @@
+{
+  "id": "subtle-async-blocking-sleep",
+  "description": "Blocking time.sleep inside an async handler stalls the whole event loop.",
+  "requires_context": false,
+  "change_request": {
+    "title": "Wait for export job",
+    "description": "Poll until the export finishes."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/handler.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "async def handle_export(request: Request) -> Response:",
+          "side": "context",
+          "new_line": 6,
+          "old_line": 6
+        },
+        {
+          "content": "    job = await request.app.queue.submit(request.json())",
+          "side": "context",
+          "new_line": 7,
+          "old_line": 7
+        },
+        {
+          "content": "    while not job.done():",
+          "side": "new",
+          "new_line": 8
+        },
+        {
+          "content": "        time.sleep(0.5)",
+          "side": "new",
+          "new_line": 9
+        },
+        {
+          "content": "    return Response(job.result())",
+          "side": "context",
+          "new_line": 10,
+          "old_line": 10
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/handler.py": "import time\n\nfrom app.http import Request, Response\n\n\nasync def handle_export(request: Request) -> Response:\n    job = await request.app.queue.submit(request.json())\n    while not job.done():\n        time.sleep(0.5)\n    return Response(job.result())\n"
+  },
+  "labels": [
+    {
+      "path": "app/handler.py",
+      "line": 9,
+      "category": "reliability",
+      "note": "blocks the event loop; use await asyncio.sleep"
+    }
+  ]
+}

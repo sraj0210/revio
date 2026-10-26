@@ -1,0 +1,31 @@
+{
+  "id": "clean-ctx-allowlisted-sql-identifier",
+  "description": "f-string SQL looks injectable, but the identifier comes from a fixed allow-list above the diff and the value is parameterized. No finding expected.",
+  "requires_context": true,
+  "change_request": {
+    "title": "Count rows since a date",
+    "description": "Report helper for dashboards."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/reports.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "    sql = f\"SELECT COUNT(*) FROM {table} WHERE created_at >= ?\"",
+          "side": "new",
+          "new_line": 6
+        },
+        {
+          "content": "    return conn.execute(sql, (since,)).fetchone()[0]",
+          "side": "new",
+          "new_line": 7
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/reports.py": "_TABLES = {\"orders\": \"orders\", \"invoices\": \"invoices\"}\n\n\ndef count_rows(conn, kind: str, since: str) -> int:\n    table = _TABLES[kind]  # KeyError for anything not allow-listed\n    sql = f\"SELECT COUNT(*) FROM {table} WHERE created_at >= ?\"\n    return conn.execute(sql, (since,)).fetchone()[0]\n"
+  },
+  "labels": []
+}
