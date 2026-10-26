@@ -69,6 +69,19 @@ class FindingLite(BaseModel):
     category: Category | None = None
 
 
+class ReviewOutcome(BaseModel):
+    """What a reviewer would publish for one case.
+
+    ``withheld_reason`` is set when production would publish no findings at all (partial input,
+    findings overflow, agent-incomplete, unusable model output); ``findings`` is then empty. The
+    scorer reports withheld runs separately, so a silent "found nothing" is never read as a pass.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    findings: tuple[FindingLite, ...] = ()
+    withheld_reason: str | None = None
+
+
 def _case_target() -> ChangeRequestTarget:
     provider = ProviderId(value="github")
     installation = InstallationRef(provider_id=provider, external_id="eval-installation")

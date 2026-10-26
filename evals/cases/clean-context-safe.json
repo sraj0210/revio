@@ -4,7 +4,7 @@
   "requires_context": true,
   "change_request": {"title": "Use cached value", "description": "Return the cached total."},
   "diff_files": [{"new_path": "app/cache.py", "status": "modified", "lines": [
-    {"content": "    return self._cache[key].value", "side": "new", "new_line": 22}
+    {"content": "        return self._cache[key].value", "side": "new", "new_line": 6}
   ]}],
   "repository_files": {"app/cache.py": "class Cache:\n    def get(self, key):\n        if key not in self._cache:\n            self._populate(key)\n        # _populate guarantees the key exists past this point.\n        return self._cache[key].value\n"},
   "labels": []

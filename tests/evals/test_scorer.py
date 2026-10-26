@@ -55,3 +55,12 @@ def test_variance_across_repeats() -> None:
     assert report.recall_by_repeat == [1.0, 0.0]
     assert report.recall_mean == 0.5
     assert report.recall_stdev == 0.5
+
+
+def test_unanchored_findings_are_counted_not_dropped() -> None:
+    results = [_run(0, "clean", True, [FindingLite(path="z.py", line=None)], [])]
+    report = score(results, provider="x", mode="y", repeats=1, settings=MatchSettings())
+    assert report.unanchored_findings == 1
+    assert report.clean_unanchored_findings == 1
+    # Still not a false positive / false alarm by definition.
+    assert report.clean_false_alarm_rate == 0.0

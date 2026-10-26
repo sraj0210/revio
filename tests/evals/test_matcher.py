@@ -1,5 +1,7 @@
 """Deterministic finding<->label matcher behavior."""
 
+import pytest
+
 from evals.harness.cases import FindingLite, Label
 from evals.harness.matcher import MatchSettings, match_case
 
@@ -57,3 +59,25 @@ def test_wrong_file_never_matches() -> None:
         MatchSettings(),
     )
     assert m.missed_labels and m.false_positive_findings
+
+
+def test_matching_is_maximum_not_first_fit() -> None:
+    # First-fit would give A the finding at 12, leaving B unmatched; maximum matching credits both.
+    labels = [Label(path="a.py", line=10), Label(path="a.py", line=13)]
+    findings = [FindingLite(path="a.py", line=12), FindingLite(path="a.py", line=16)]
+    m = match_case(findings, labels, MatchSettings(line_window=3))
+    assert len(m.matched_labels) == 2
+    assert not m.false_positive_findings
+    reversed_match = match_case(findings, list(reversed(labels)), MatchSettings(line_window=3))
+    assert len(reversed_match.matched_labels) == 2
+
+
+def test_category_comparison_is_normalized() -> None:
+    findings = [FindingLite(path="a.py", line=10, category=" Security ")]
+    labels = [Label(path="a.py", line=10, category="security")]
+    assert not match_case(findings, labels, MatchSettings(require_category=True)).missed_labels
+
+
+def test_negative_line_window_is_rejected() -> None:
+    with pytest.raises(ValueError, match="line_window"):
+        MatchSettings(line_window=-1)

@@ -8,6 +8,8 @@ part of CI. Example:
 
 import argparse
 import asyncio
+import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,15 +19,25 @@ from evals.harness.review import build_review_case
 from evals.harness.runner import render_table, run_eval, write_report_json
 
 
+def _at_least(minimum: int) -> Callable[[str], int]:
+    def parse(value: str) -> int:
+        number = int(value)
+        if number < minimum:
+            raise argparse.ArgumentTypeError(f"must be >= {minimum}, got {number}")
+        return number
+
+    return parse
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="venaroq-eval", description="Measure Venaroq review quality (live; spends tokens)."
     )
     parser.add_argument("--provider", choices=["anthropic", "openai"], default="anthropic")
     parser.add_argument("--mode", choices=["diff-only", "agent"], default="diff-only")
-    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--repeats", type=_at_least(1), default=3)
     parser.add_argument("--cases", type=Path, default=Path("evals/cases"))
-    parser.add_argument("--line-window", type=int, default=3)
+    parser.add_argument("--line-window", type=_at_least(0), default=3)
     parser.add_argument("--require-category", action="store_true")
     parser.add_argument("--results-dir", type=Path, default=Path("evals/results"))
     args = parser.parse_args()
@@ -51,6 +63,9 @@ def main() -> None:
     out = args.results_dir / f"{args.provider}-{args.mode}-{stamp}.json"
     write_report_json(report, out)
     print(f"\nwrote {out}")
+    if not report.complete:
+        print("report is INCOMPLETE (failed runs); exiting non-zero", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

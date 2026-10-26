@@ -28,7 +28,7 @@ VENAROQ_ANTHROPIC_ENABLED=true VENAROQ_ANTHROPIC_API_KEY=sk-... \
 ```
 
 Flags: `--repeats N` (variance), `--line-window N` (match tolerance, default 3),
-`--require-category` (stricter matching), `--cases DIR`, `--results-dir DIR`. Each run prints a
+`--require-category` (stricter matching; categories are compared case- and whitespace-insensitively), `--cases DIR`, `--results-dir DIR`. Each run prints a
 summary table and writes a JSON report to `evals/results/`.
 
 ## Read the results
@@ -41,6 +41,19 @@ summary table and writes a JSON report to `evals/results/`.
 - **recall by category** — correctness / security / reliability / maintainability.
 - **variance** — spread of recall across repetitions; AI output is nondeterministic, so this is itself
   a quality signal.
+- **unanchored findings** — summary-level findings with no line. Not scored, but counted (and counted
+  separately on clean diffs) so summary noise stays visible.
+- **withheld runs** — runs where the service would publish *no* findings (partial input, findings
+  overflow, agent loop incomplete, unusable model output), broken down by reason. These score as what
+  users see — nothing — so a high count here explains low recall.
+- **INCOMPLETE** — any review that *failed* (bad credentials, rate limit, ambiguous provider call) is
+  excluded from every metric and listed under `failures`. The report is marked `"complete": false`
+  and the CLI exits non-zero; do not use an incomplete report for comparison.
+
+Scores reflect **what the service would publish**, not raw model output: the harness applies the
+same publish rules as `ReviewGenerationService` (diff limits, token-admission reduction, the
+summary-confidence threshold, the findings cap, and withholding findings from partial results).
+It bypasses only the durable queue, persistence, and the GitHub publish path.
 
 The classic comparison is **diff-only vs agent** on the context-dependent cases, and **Anthropic vs
 OpenAI** head-to-head on the same set.
@@ -49,7 +62,7 @@ OpenAI** head-to-head on the same set.
 
 The seed cases are **synthetic fixtures**, not the real-world defect distribution. The numbers are
 **directional** — trustworthy for A/B comparison (provider/mode) and regression tracking, not as an
-absolute "accuracy" claim. Line-window matching can over- or under-credit, so results are only
+absolute "accuracy" claim. Matching is one-to-one and maximum (order-independent), but line-window matching can still over- or under-credit, so results are only
 interpretable alongside the matcher settings shown in the report. Trustworthy *absolute* numbers
 require a real labeled PR corpus — the planned fast-follow.
 
