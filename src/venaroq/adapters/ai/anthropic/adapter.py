@@ -50,21 +50,27 @@ SYSTEM_PROMPT = REVIEW_SYSTEM_PROMPT
 
 # Agent-mode tools. get_file/get_tree are read-only and executed by the core; submit_review carries
 # the final structured review as its input so tool use and structured output never conflict.
+# All are strict (constrained decoding), giving the agent turn the same schema-valid guarantee the
+# diff-only path gets from output_config; without it the model occasionally emitted malformed
+# submit_review input (e.g. one parameter folded into another's string), dropping the whole review.
 _AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_tree",
         "description": "List a repository directory at the pull-request head commit.",
         "input_schema": PATH_TOOL_INPUT_SCHEMA,
+        "strict": True,
     },
     {
         "name": "get_file",
         "description": "Read one repository file at the pull-request head to verify a finding.",
         "input_schema": PATH_TOOL_INPUT_SCHEMA,
+        "strict": True,
     },
     {
         "name": "submit_review",
         "description": "Submit the final structured review. Call this exactly once when done.",
         "input_schema": REVIEW_JSON_SCHEMA,
+        "strict": True,
     },
 ]
 
