@@ -1,0 +1,55 @@
+{
+  "id": "subtle-timing-unsafe-compare",
+  "description": "HMAC signature checked with == instead of a constant-time comparison.",
+  "requires_context": false,
+  "change_request": {
+    "title": "Verify webhook signatures",
+    "description": "Reject webhooks with a bad signature."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/webhook.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 3,
+          "old_line": 3
+        },
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 4,
+          "old_line": 4
+        },
+        {
+          "content": "def verify_signature(secret: bytes, body: bytes, provided: str) -> bool:",
+          "side": "new",
+          "new_line": 5
+        },
+        {
+          "content": "    expected = hmac.new(secret, body, hashlib.sha256).hexdigest()",
+          "side": "new",
+          "new_line": 6
+        },
+        {
+          "content": "    return provided == expected",
+          "side": "new",
+          "new_line": 7
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/webhook.py": "import hashlib\nimport hmac\n\n\ndef verify_signature(secret: bytes, body: bytes, provided: str) -> bool:\n    expected = hmac.new(secret, body, hashlib.sha256).hexdigest()\n    return provided == expected\n"
+  },
+  "labels": [
+    {
+      "path": "app/webhook.py",
+      "line": 7,
+      "category": "security",
+      "note": "timing attack; use hmac.compare_digest"
+    }
+  ]
+}

@@ -46,6 +46,8 @@ summary table and writes a JSON report to `evals/results/`.
 - **withheld runs** — runs where the service would publish *no* findings (partial input, findings
   overflow, agent loop incomplete, unusable model output), broken down by reason. These score as what
   users see — nothing — so a high count here explains low recall.
+- **per-case breakdown** — the table lists every case that had a miss, false positive, withheld
+  or failed run (all cases are in the JSON under `by_case`), so a weak metric traces to its cases.
 - **INCOMPLETE** — any review that *failed* (bad credentials, rate limit, ambiguous provider call) is
   excluded from every metric and listed under `failures`. The report is marked `"complete": false`
   and the CLI exits non-zero; do not use an incomplete report for comparison.
@@ -65,6 +67,19 @@ The seed cases are **synthetic fixtures**, not the real-world defect distributio
 absolute "accuracy" claim. Matching is one-to-one and maximum (order-independent), but line-window matching can still over- or under-credit, so results are only
 interpretable alongside the matcher settings shown in the report. Trustworthy *absolute* numbers
 require a real labeled PR corpus — the planned fast-follow.
+
+## The case set
+
+- **Textbook defects** (`security-*`, `correctness-*`, `reliability-*`) — baseline; a regression here
+  is a real problem.
+- **Subtle defects** (`subtle-*`) — visible in the diff but not textbook (blocking call in async,
+  `return` in `finally`, mutate-while-iterating, timing-unsafe compare).
+- **Context-dependent defects** (`ctx-*`, `context-*`) — the evidence is outside the diff, mostly in
+  *another file*, so diff-only should struggle and agent mode should not.
+- **Clean cases** (`clean-*`), including risky-looking ones whose safety is only provable from
+  context (`clean-ctx-*`) — false-positive bait.
+
+Line numbers must agree with each case's `repository_files`; `tests/evals` enforces this.
 
 ## Add cases
 

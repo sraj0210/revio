@@ -1,0 +1,46 @@
+{
+  "id": "clean-looks-off-by-one",
+  "description": "range(len(items) - 1) with items[i + 1] looks like an off-by-one but is the correct pairwise bound. No finding expected.",
+  "requires_context": false,
+  "change_request": {
+    "title": "Add is_sorted helper",
+    "description": "Check ordering before binary search."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/order.py",
+      "status": "added",
+      "lines": [
+        {
+          "content": "def is_sorted(items: list[int]) -> bool:",
+          "side": "new",
+          "new_line": 1
+        },
+        {
+          "content": "    for i in range(len(items) - 1):",
+          "side": "new",
+          "new_line": 2
+        },
+        {
+          "content": "        if items[i] > items[i + 1]:",
+          "side": "new",
+          "new_line": 3
+        },
+        {
+          "content": "            return False",
+          "side": "new",
+          "new_line": 4
+        },
+        {
+          "content": "    return True",
+          "side": "new",
+          "new_line": 5
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/order.py": "def is_sorted(items: list[int]) -> bool:\n    for i in range(len(items) - 1):\n        if items[i] > items[i + 1]:\n            return False\n    return True\n"
+  },
+  "labels": []
+}

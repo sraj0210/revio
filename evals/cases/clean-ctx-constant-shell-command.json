@@ -1,0 +1,44 @@
+{
+  "id": "clean-ctx-constant-shell-command",
+  "description": "shell=True looks dangerous, but the command is a hard-coded constant defined in another file with no user input. No finding expected.",
+  "requires_context": true,
+  "change_request": {
+    "title": "Run the build step",
+    "description": "Invoke the project build."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/build.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 4,
+          "old_line": 4
+        },
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 5,
+          "old_line": 5
+        },
+        {
+          "content": "def run_build() -> None:",
+          "side": "new",
+          "new_line": 6
+        },
+        {
+          "content": "    subprocess.run(BUILD_CMD, shell=True, check=True)",
+          "side": "new",
+          "new_line": 7
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/consts.py": "BUILD_CMD = \"make -C build all\"\n",
+    "app/build.py": "import subprocess\n\nfrom app.consts import BUILD_CMD\n\n\ndef run_build() -> None:\n    subprocess.run(BUILD_CMD, shell=True, check=True)\n"
+  },
+  "labels": []
+}

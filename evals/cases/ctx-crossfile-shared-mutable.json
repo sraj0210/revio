@@ -1,0 +1,61 @@
+{
+  "id": "ctx-crossfile-shared-mutable",
+  "description": "Mutates the dict returned by get_defaults(), which another file shows is the shared module-level object, silently changing defaults for every caller.",
+  "requires_context": true,
+  "change_request": {
+    "title": "More retries for bulk jobs",
+    "description": "Bulk jobs need more retries than the default."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/jobs.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 2,
+          "old_line": 2
+        },
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 3,
+          "old_line": 3
+        },
+        {
+          "content": "def settings_for_bulk_job() -> dict[str, float]:",
+          "side": "new",
+          "new_line": 4
+        },
+        {
+          "content": "    settings = get_defaults()",
+          "side": "new",
+          "new_line": 5
+        },
+        {
+          "content": "    settings[\"retries\"] = 10",
+          "side": "new",
+          "new_line": 6
+        },
+        {
+          "content": "    return settings",
+          "side": "new",
+          "new_line": 7
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/defaults.py": "_DEFAULTS = {\"retries\": 3, \"backoff\": 0.5}\n\n\ndef get_defaults() -> dict[str, float]:\n    \"\"\"Return the process-wide default settings (shared; do not mutate).\"\"\"\n    return _DEFAULTS\n",
+    "app/jobs.py": "from app.defaults import get_defaults\n\n\ndef settings_for_bulk_job() -> dict[str, float]:\n    settings = get_defaults()\n    settings[\"retries\"] = 10\n    return settings\n"
+  },
+  "labels": [
+    {
+      "path": "app/jobs.py",
+      "line": 6,
+      "category": "correctness",
+      "note": "mutates shared _DEFAULTS for all callers"
+    }
+  ]
+}

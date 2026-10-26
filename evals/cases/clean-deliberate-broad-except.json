@@ -1,0 +1,58 @@
+{
+  "id": "clean-deliberate-broad-except",
+  "description": "Broad except at the top of a worker loop that logs with traceback and dead-letters the job; intentional and correct. No finding expected.",
+  "requires_context": false,
+  "change_request": {
+    "title": "Keep worker alive on job failure",
+    "description": "Dead-letter failing jobs instead of crashing the worker."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/worker.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "    while True:",
+          "side": "context",
+          "new_line": 8,
+          "old_line": 8
+        },
+        {
+          "content": "        job = queue.get()",
+          "side": "context",
+          "new_line": 9,
+          "old_line": 9
+        },
+        {
+          "content": "        try:",
+          "side": "new",
+          "new_line": 10
+        },
+        {
+          "content": "            job.run()",
+          "side": "new",
+          "new_line": 11
+        },
+        {
+          "content": "        except Exception:",
+          "side": "new",
+          "new_line": 12
+        },
+        {
+          "content": "            log.exception(\"job %s failed\", job.id)",
+          "side": "new",
+          "new_line": 13
+        },
+        {
+          "content": "            queue.dead_letter(job)",
+          "side": "new",
+          "new_line": 14
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/worker.py": "import logging\n\nlog = logging.getLogger(__name__)\n\n\ndef run_forever(queue) -> None:\n    \"\"\"Top-level worker loop: one bad job must never stop the worker.\"\"\"\n    while True:\n        job = queue.get()\n        try:\n            job.run()\n        except Exception:\n            log.exception(\"job %s failed\", job.id)\n            queue.dead_letter(job)\n"
+  },
+  "labels": []
+}

@@ -1,0 +1,70 @@
+{
+  "id": "subtle-mutate-while-iterating",
+  "description": "Deleting from a dict while iterating over it raises RuntimeError as soon as one session expires.",
+  "requires_context": false,
+  "change_request": {
+    "title": "Purge expired sessions",
+    "description": "Periodically drop expired sessions."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/sessions.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 4,
+          "old_line": 4
+        },
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 5,
+          "old_line": 5
+        },
+        {
+          "content": "def purge_expired(now: float | None = None) -> None:",
+          "side": "new",
+          "new_line": 6
+        },
+        {
+          "content": "    if now is None:",
+          "side": "new",
+          "new_line": 7
+        },
+        {
+          "content": "        now = time.time()",
+          "side": "new",
+          "new_line": 8
+        },
+        {
+          "content": "    for token, expires_at in _SESSIONS.items():",
+          "side": "new",
+          "new_line": 9
+        },
+        {
+          "content": "        if expires_at < now:",
+          "side": "new",
+          "new_line": 10
+        },
+        {
+          "content": "            del _SESSIONS[token]",
+          "side": "new",
+          "new_line": 11
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/sessions.py": "import time\n\n_SESSIONS: dict[str, float] = {}\n\n\ndef purge_expired(now: float | None = None) -> None:\n    if now is None:\n        now = time.time()\n    for token, expires_at in _SESSIONS.items():\n        if expires_at < now:\n            del _SESSIONS[token]\n"
+  },
+  "labels": [
+    {
+      "path": "app/sessions.py",
+      "line": 11,
+      "category": "correctness",
+      "note": "dict changed size during iteration"
+    }
+  ]
+}

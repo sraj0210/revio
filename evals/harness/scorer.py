@@ -44,6 +44,27 @@ class RunFailure:
     error: str
 
 
+@dataclass
+class CaseTally:
+    """Per-case totals across repeats, so a weak metric can be traced to the cases behind it."""
+
+    runs: int = 0
+    labels: int = 0
+    matched_labels: int = 0
+    false_positive_findings: int = 0
+    withheld_runs: int = 0
+    failed_runs: int = 0
+
+    @property
+    def perfect(self) -> bool:
+        return (
+            self.matched_labels == self.labels
+            and not self.false_positive_findings
+            and not self.withheld_runs
+            and not self.failed_runs
+        )
+
+
 def _floats() -> list[float]:
     return []
 
@@ -58,6 +79,10 @@ def _countmap() -> dict[str, int]:
 
 def _failures() -> list[RunFailure]:
     return []
+
+
+def _tallies() -> dict[str, CaseTally]:
+    return {}
 
 
 @dataclass
@@ -81,6 +106,7 @@ class EvalReport:
     failures: list[RunFailure] = field(default_factory=_failures)
     recall_by_repeat: list[float] = field(default_factory=_floats)
     recall_by_category: dict[str, float] = field(default_factory=_catmap)
+    by_case: dict[str, CaseTally] = field(default_factory=_tallies)
     disclaimer: str = _DISCLAIMER
 
     @property
@@ -129,10 +155,17 @@ def score(
     category_matched: dict[str, int] = {}
     for run in results:
         report.total_runs += 1
+        tally = report.by_case.setdefault(run.case_id, CaseTally())
+        tally.runs += 1
         if run.error is not None:
+            tally.failed_runs += 1
             report.failures.append(RunFailure(run.repeat, run.case_id, run.error))
             continue
+        tally.labels += len(run.match.matched_labels) + len(run.match.missed_labels)
+        tally.matched_labels += len(run.match.matched_labels)
+        tally.false_positive_findings += len(run.match.false_positive_findings)
         if run.withheld_reason is not None:
+            tally.withheld_runs += 1
             report.withheld_runs += 1
             report.withheld_by_reason[run.withheld_reason] = (
                 report.withheld_by_reason.get(run.withheld_reason, 0) + 1

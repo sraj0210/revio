@@ -1,0 +1,49 @@
+{
+  "id": "ctx-missing-lock",
+  "description": "New method mutates shared state without the lock every other method in the class holds; the locking convention is only visible outside the diff.",
+  "requires_context": true,
+  "change_request": {
+    "title": "Support refunds",
+    "description": "Add a refund path to the ledger."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/ledger.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "",
+          "side": "context",
+          "new_line": 24,
+          "old_line": 24
+        },
+        {
+          "content": "    def apply_refund(self, account: str, amount: int) -> None:",
+          "side": "new",
+          "new_line": 25
+        },
+        {
+          "content": "        current = self._balances.get(account, 0)",
+          "side": "new",
+          "new_line": 26
+        },
+        {
+          "content": "        self._balances[account] = current + amount",
+          "side": "new",
+          "new_line": 27
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/ledger.py": "import threading\n\n\nclass Ledger:\n    \"\"\"Account balances. All mutation must hold self._lock (accessed from worker threads).\"\"\"\n\n    def __init__(self) -> None:\n        self._lock = threading.Lock()\n        self._balances: dict[str, int] = {}\n\n    def deposit(self, account: str, amount: int) -> None:\n        with self._lock:\n            self._balances[account] = self._balances.get(account, 0) + amount\n\n    def withdraw(self, account: str, amount: int) -> None:\n        with self._lock:\n            if self._balances.get(account, 0) < amount:\n                raise ValueError(\"insufficient funds\")\n            self._balances[account] -= amount\n\n    def balance(self, account: str) -> int:\n        with self._lock:\n            return self._balances.get(account, 0)\n\n    def apply_refund(self, account: str, amount: int) -> None:\n        current = self._balances.get(account, 0)\n        self._balances[account] = current + amount\n"
+  },
+  "labels": [
+    {
+      "path": "app/ledger.py",
+      "line": 27,
+      "category": "reliability",
+      "note": "read-modify-write without self._lock races with deposit/withdraw"
+    }
+  ]
+}

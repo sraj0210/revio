@@ -1,0 +1,57 @@
+{
+  "id": "ctx-crossfile-timeout-units",
+  "description": "Caller passes seconds to set_timeout, which another file defines in milliseconds; the diff alone reads as correct.",
+  "requires_context": true,
+  "change_request": {
+    "title": "Raise export timeout",
+    "description": "Large exports were timing out; allow 30 seconds."
+  },
+  "diff_files": [
+    {
+      "new_path": "app/sync.py",
+      "status": "modified",
+      "lines": [
+        {
+          "content": "def make_client(host: str) -> Client:",
+          "side": "context",
+          "new_line": 4,
+          "old_line": 4
+        },
+        {
+          "content": "    client = Client(host)",
+          "side": "context",
+          "new_line": 5,
+          "old_line": 5
+        },
+        {
+          "content": "    # Large exports can take up to 30 seconds.",
+          "side": "new",
+          "new_line": 6
+        },
+        {
+          "content": "    client.set_timeout(30)",
+          "side": "new",
+          "new_line": 7
+        },
+        {
+          "content": "    return client",
+          "side": "context",
+          "new_line": 8,
+          "old_line": 8
+        }
+      ]
+    }
+  ],
+  "repository_files": {
+    "app/client.py": "import socket\n\n\nclass Client:\n    def __init__(self, host: str) -> None:\n        self._host = host\n        self._timeout_ms = 1000\n\n    def set_timeout(self, value: int) -> None:\n        \"\"\"Set the socket timeout in MILLISECONDS.\"\"\"\n        self._timeout_ms = value\n\n    def connect(self) -> socket.socket:\n        return socket.create_connection((self._host, 443), timeout=self._timeout_ms / 1000)\n",
+    "app/sync.py": "from app.client import Client\n\n\ndef make_client(host: str) -> Client:\n    client = Client(host)\n    # Large exports can take up to 30 seconds.\n    client.set_timeout(30)\n    return client\n"
+  },
+  "labels": [
+    {
+      "path": "app/sync.py",
+      "line": 7,
+      "category": "correctness",
+      "note": "30 ms, not 30 s: set_timeout takes milliseconds"
+    }
+  ]
+}

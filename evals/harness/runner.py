@@ -87,6 +87,17 @@ def report_to_dict(report: EvalReport) -> dict[str, object]:
             "failed_runs": report.failed_runs,
         },
         "withheld_by_reason": report.withheld_by_reason,
+        "by_case": {
+            case_id: {
+                "runs": t.runs,
+                "labels": t.labels,
+                "matched_labels": t.matched_labels,
+                "false_positive_findings": t.false_positive_findings,
+                "withheld_runs": t.withheld_runs,
+                "failed_runs": t.failed_runs,
+            }
+            for case_id, t in report.by_case.items()
+        },
         "failures": [
             {"repeat": f.repeat, "case_id": f.case_id, "error": f.error} for f in report.failures
         ],
@@ -128,6 +139,14 @@ def render_table(report: EvalReport) -> str:
         lines.extend(
             f"      {category:<18} {value:6.1%}"
             for category, value in report.recall_by_category.items()
+        )
+    imperfect = {case_id: t for case_id, t in report.by_case.items() if not t.perfect}
+    if imperfect:
+        lines.append("  cases with misses / false positives / withheld / failed runs:")
+        lines.extend(
+            f"      {case_id:<38} caught {t.matched_labels}/{t.labels}"
+            f"  fp {t.false_positive_findings}  withheld {t.withheld_runs}  failed {t.failed_runs}"
+            for case_id, t in imperfect.items()
         )
     lines.append("-" * 72)
     lines.append(f"  NOTE: {report.disclaimer}")
