@@ -1,0 +1,11 @@
+{
+  "id": "correctness-off-by-one",
+  "description": "Loop indexes one past the end of the list (local).",
+  "change_request": {"title": "Sum neighbors", "description": "Add adjacent pairs."},
+  "diff_files": [{"new_path": "app/calc.py", "status": "modified", "lines": [
+    {"content": "    total = 0", "side": "new", "new_line": 14},
+    {"content": "    for i in range(len(values) + 1):", "side": "new", "new_line": 15},
+    {"content": "        total += values[i]", "side": "new", "new_line": 16}
+  ]}],
+  "labels": [{"path": "app/calc.py", "line": 15, "category": "correctness", "note": "off-by-one IndexError"}]
+}

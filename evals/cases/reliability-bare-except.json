@@ -1,0 +1,12 @@
+{
+  "id": "reliability-bare-except",
+  "description": "Bare except swallows all errors including KeyboardInterrupt (local).",
+  "change_request": {"title": "Guard parse", "description": "Make parsing resilient."},
+  "diff_files": [{"new_path": "app/parse.py", "status": "modified", "lines": [
+    {"content": "    try:", "side": "new", "new_line": 31},
+    {"content": "        return json.loads(raw)", "side": "new", "new_line": 32},
+    {"content": "    except:", "side": "new", "new_line": 33},
+    {"content": "        return None", "side": "new", "new_line": 34}
+  ]}],
+  "labels": [{"path": "app/parse.py", "line": 33, "category": "reliability", "note": "bare except"}]
+}

@@ -1,0 +1,10 @@
+{
+  "id": "clean-refactor",
+  "description": "A safe extraction refactor with no defect; no finding expected.",
+  "change_request": {"title": "Extract helper", "description": "Pull total into a helper."},
+  "diff_files": [{"new_path": "app/calc.py", "status": "modified", "lines": [
+    {"content": "def total_price(items):", "side": "new", "new_line": 40},
+    {"content": "    return sum(item.price for item in items)", "side": "new", "new_line": 41}
+  ]}],
+  "labels": []
+}

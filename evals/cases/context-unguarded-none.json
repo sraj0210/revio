@@ -1,0 +1,13 @@
+{
+  "id": "context-unguarded-none",
+  "description": "The diff dereferences lookup()'s result, which the rest of the file documents can be None; only detectable with file context. Exercises diff-only vs agent mode.",
+  "requires_context": true,
+  "change_request": {"title": "Simplify handler", "description": "Render the profile directly."},
+  "diff_files": [{"new_path": "app/handler.py", "status": "modified", "lines": [
+    {"content": "def handle(req):", "side": "context", "old_line": 6, "new_line": 6},
+    {"content": "    user = lookup(req.user_id)", "side": "context", "old_line": 7, "new_line": 7},
+    {"content": "    return render(user.profile)", "side": "new", "new_line": 8}
+  ]}],
+  "repository_files": {"app/handler.py": "def lookup(user_id):\n    # Returns None when the user is missing.\n    return DB.get(user_id)\n\n\ndef handle(req):\n    user = lookup(req.user_id)\n    return render(user.profile)\n\n\ndef render(profile):\n    return profile.to_html()\n"},
+  "labels": [{"path": "app/handler.py", "line": 8, "category": "correctness", "note": "user may be None; lookup can return None"}]
+}
