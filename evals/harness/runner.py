@@ -15,6 +15,13 @@ from evals.harness.scorer import EvalReport, RunResult, score
 ReviewCase = Callable[[EvalCase], Awaitable[ReviewOutcome]]
 
 
+def _describe(error: Exception) -> str:
+    """Error class and message, plus the content-free cause code provider errors carry."""
+    cause = getattr(error, "cause", None)
+    suffix = f" [cause={cause}]" if isinstance(cause, str) else ""
+    return f"{type(error).__name__}: {error}{suffix}"
+
+
 async def run_eval(
     cases: Sequence[EvalCase],
     review_case: ReviewCase,
@@ -32,14 +39,15 @@ async def run_eval(
             try:
                 outcome = await review_case(case)
             except Exception as error:  # recorded as a failed run, never scored as "found nothing"
-                print(f"  ! case {case.id}: review failed ({type(error).__name__}: {error})")
+                description = _describe(error)
+                print(f"  ! case {case.id}: review failed ({description})")
                 results.append(
                     RunResult(
                         repeat=repeat,
                         case_id=case.id,
                         is_clean=case.is_clean,
                         match=CaseMatch(),
-                        error=f"{type(error).__name__}: {error}",
+                        error=description,
                     )
                 )
                 continue

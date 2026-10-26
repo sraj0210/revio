@@ -99,7 +99,7 @@ class AgentReviewService:
             except MalformedProviderOutputError as error:
                 observed = error.usage if isinstance(error.usage, TokenUsage) else TokenUsage()
                 raise MalformedProviderOutputError(
-                    str(error), usage=_add_usage(total, observed)
+                    str(error), usage=_add_usage(total, observed), detail=error.detail
                 ) from None
             total = _add_usage(total, turn.usage)
             if turn.final_review is not None:
@@ -121,7 +121,9 @@ class AgentReviewService:
                 return review
             if not turn.tool_calls:
                 raise MalformedProviderOutputError(
-                    "agent turn produced neither tools nor a review", usage=total
+                    "agent turn produced neither tools nor a review",
+                    usage=total,
+                    detail="agent_no_tools_or_review",
                 )
             results = await executor.execute(turn.tool_calls)
             state = self._adapter.append_tool_results(turn.payload, results)

@@ -1,5 +1,6 @@
 """Shared test fixtures, including production-migrated SQLite databases."""
 
+import logging
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -48,6 +49,16 @@ class AlembicDatabase:
         )
 
 
+@pytest.fixture(autouse=True)
+def isolate_root_logging() -> Iterator[None]:
+    """Undo root-logger changes (configure_logging via create_app) so one test's handler,
+    bound to that test's captured stream, never receives a later test's records."""
+    root = logging.getLogger()
+    handlers, level = list(root.handlers), root.level
+    yield
+    root.handlers, root.level = handlers, level
+
+
 @pytest.fixture
 def alembic_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[AlembicDatabase]:
     """Apply Alembic and verify the runtime revision and connection policy."""
@@ -55,6 +66,7 @@ def alembic_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
     monkeypatch.setenv("VENAROQ_DATABASE_PATH", str(path))
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
+    config.attributes["configure_logger"] = False  # keep pytest's log capture intact
     command.upgrade(config, "head")
 
     connection = sqlite3.connect(path)

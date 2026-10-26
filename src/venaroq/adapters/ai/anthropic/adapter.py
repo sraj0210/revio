@@ -6,6 +6,7 @@ from typing import Any, cast
 import httpx
 from pydantic import ValidationError
 
+from venaroq.adapters.ai.http_errors import ambiguous_cause
 from venaroq.adapters.ai.review_schema import (
     AGENT_SYSTEM_PROMPT,
     PATH_TOOL_INPUT_SCHEMA,
@@ -13,12 +14,14 @@ from venaroq.adapters.ai.review_schema import (
     REVALIDATION_SYSTEM_PROMPT,
     REVIEW_JSON_SCHEMA,
     REVIEW_SYSTEM_PROMPT,
+    OutputShapeError,
     RevalidationBatchDTO,
     ReviewDTO,
     build_revalidation_result,
     build_review_result,
     serialize_revalidation_content,
     serialize_review_content,
+    validation_detail,
 )
 from venaroq.config.anthropic import AnthropicSettings
 from venaroq.config.review import ReviewSettings
@@ -218,8 +221,10 @@ class AnthropicReviewAdapter:
             httpx.WriteError,
             httpx.ReadError,
             httpx.RemoteProtocolError,
-        ):
-            raise ProviderCallAmbiguousError("Anthropic Messages outcome is ambiguous") from None
+        ) as error:
+            raise ProviderCallAmbiguousError(
+                "Anthropic Messages outcome is ambiguous", cause=ambiguous_cause(error)
+            ) from None
         if response.status_code in {429, 529}:
             retry_after = response.headers.get("retry-after")
             try:
@@ -231,7 +236,10 @@ class AnthropicReviewAdapter:
                 retry_after_seconds=retry_seconds,
             )
         if response.status_code >= 500:
-            raise ProviderCallAmbiguousError("Anthropic Messages outcome is ambiguous")
+            raise ProviderCallAmbiguousError(
+                "Anthropic Messages outcome is ambiguous",
+                cause=ambiguous_cause(status_code=response.status_code),
+            )
         if response.status_code >= 400:
             raise ProviderCallTerminalError("Anthropic Messages request was rejected")
         return response
@@ -293,7 +301,7 @@ class AnthropicReviewAdapter:
             blocks = cast(list[dict[str, Any]], body["content"])
             texts = [block["text"] for block in blocks if block.get("type") == "text"]
             if len(texts) != 1:
-                raise ValueError
+                raise OutputShapeError("no_text_block" if not texts else "multiple_text_blocks")
             parsed = ReviewDTO.model_validate_json(texts[0])
         except (
             ProviderCallRejectedError,
@@ -302,14 +310,16 @@ class AnthropicReviewAdapter:
             ProviderCallObservedInvalidResponseError,
         ):
             raise
-        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
             observed_usage = locals().get("usage")
             if not isinstance(observed_usage, TokenUsage):
                 raise ProviderCallObservedInvalidResponseError(
                     "Anthropic 2xx Messages response could not be normalized"
                 ) from None
             raise MalformedProviderOutputError(
-                "Anthropic response failed local validation", usage=observed_usage
+                "Anthropic response failed local validation",
+                usage=observed_usage,
+                detail=validation_detail(error),
             ) from None
         return build_review_result(parsed, usage)
 
@@ -401,7 +411,7 @@ class AnthropicReviewAdapter:
             blocks = cast(list[dict[str, Any]], body["content"])
             texts = [block["text"] for block in blocks if block.get("type") == "text"]
             if len(texts) != 1:
-                raise ValueError
+                raise OutputShapeError("no_text_block" if not texts else "multiple_text_blocks")
             parsed = RevalidationBatchDTO.model_validate_json(texts[0])
         except (
             ProviderCallRejectedError,
@@ -410,14 +420,16 @@ class AnthropicReviewAdapter:
             ProviderCallObservedInvalidResponseError,
         ):
             raise
-        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
             observed_usage = locals().get("usage")
             if not isinstance(observed_usage, TokenUsage):
                 raise ProviderCallObservedInvalidResponseError(
                     "Anthropic 2xx revalidation response could not be normalized"
                 ) from None
             raise MalformedProviderOutputError(
-                "Anthropic revalidation response failed local validation", usage=observed_usage
+                "Anthropic revalidation response failed local validation",
+                usage=observed_usage,
+                detail=validation_detail(error),
             ) from None
         return build_revalidation_result(parsed, usage)
 
@@ -475,6 +487,7 @@ class AnthropicReviewAdapter:
             key: value for key, value in payload.items() if not key.startswith("_venaroq")
         }
         response = await self._post_messages(request_payload)
+        stage = "response"  # which part of the turn failed validation, for a content-free detail
         try:
             body = cast(dict[str, Any], response.json())
             usage = self._usage_from(body)
@@ -487,6 +500,7 @@ class AnthropicReviewAdapter:
             tool_uses = [block for block in blocks if block.get("type") == "tool_use"]
             submit = next((b for b in tool_uses if b.get("name") == "submit_review"), None)
             if submit is not None:
+                stage = "submit_review"
                 review = build_review_result(ReviewDTO.model_validate(submit["input"]), usage)
                 return AgentTurnResult(final_review=review, usage=usage, payload=payload)
             fetches = [b for b in tool_uses if b.get("name") in ("get_file", "get_tree")]
@@ -509,9 +523,12 @@ class AnthropicReviewAdapter:
                 return AgentTurnResult(
                     tool_calls=calls, usage=usage, payload={**payload, "messages": messages}
                 )
+            stage = "text_reply"
             texts = [block["text"] for block in blocks if block.get("type") == "text"]
             if len(texts) != 1:
-                raise ValueError
+                raise OutputShapeError(
+                    "no_tool_call_or_text" if not texts else "multiple_text_blocks"
+                )
             review = build_review_result(ReviewDTO.model_validate_json(texts[0]), usage)
             return AgentTurnResult(final_review=review, usage=usage, payload=payload)
         except (
@@ -521,14 +538,16 @@ class AnthropicReviewAdapter:
             ProviderCallObservedInvalidResponseError,
         ):
             raise
-        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        except (ValidationError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
             observed_usage = locals().get("usage")
             if not isinstance(observed_usage, TokenUsage):
                 raise ProviderCallObservedInvalidResponseError(
                     "Anthropic 2xx agent turn could not be normalized"
                 ) from None
             raise MalformedProviderOutputError(
-                "Anthropic agent turn failed local validation", usage=observed_usage
+                "Anthropic agent turn failed local validation",
+                usage=observed_usage,
+                detail=f"{stage}:{validation_detail(error)}",
             ) from None
 
     def append_tool_results(

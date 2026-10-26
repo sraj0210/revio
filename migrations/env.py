@@ -12,8 +12,10 @@ from venaroq.adapters.persistence.sqlite.connection import (
 from venaroq.config.database import DatabaseSettings
 
 config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# Callers that already own logging (the test suite) opt out; fileConfig would otherwise replace the
+# root handlers and disable every logger created before it.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 settings = DatabaseSettings()
 prepare_database_file(settings)

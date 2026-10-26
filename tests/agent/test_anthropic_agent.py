@@ -13,7 +13,7 @@ from venaroq.adapters.ai.anthropic.adapter import (
 from venaroq.config.anthropic import AnthropicSettings
 from venaroq.config.review import ReviewSettings
 from venaroq.domain.agent import AgentToolResult
-from venaroq.errors import ProviderCallObservedTerminalError
+from venaroq.errors import MalformedProviderOutputError, ProviderCallObservedTerminalError
 
 
 def _adapter(handler: object) -> AnthropicReviewAdapter:
@@ -235,3 +235,53 @@ def test_agent_tools_are_strict_with_compatible_schemas() -> None:
     for tool in _AGENT_TOOLS:
         assert tool["strict"] is True, tool["name"]
         _strict_compatible(tool["input_schema"], tool["name"])
+
+
+def _respond(content: list[dict[str, Any]]) -> object:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": "end_turn",
+                "content": content,
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+        )
+
+    return handler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "detail"),
+    [
+        (
+            # The live failure: `findings` folded into the summary string, so it is missing.
+            [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "submit_review",
+                    "input": {"summary": 'ok</summary>\n<parameter name="findings">[]'},
+                }
+            ],
+            "submit_review:schema_invalid:findings:missing",
+        ),
+        (
+            [{"type": "text", "text": "I reviewed it and found nothing."}],
+            "text_reply:schema_invalid:root:json_invalid",
+        ),
+        ([], "text_reply:no_tool_call_or_text"),
+    ],
+)
+async def test_malformed_agent_turn_names_a_content_free_detail(
+    content: list[dict[str, Any]], detail: str
+) -> None:
+    adapter = _adapter(_respond(content))
+    with pytest.raises(MalformedProviderOutputError) as raised:
+        await adapter.agent_turn(_payload())
+    assert raised.value.detail == detail
+    # The detail never echoes model output.
+    assert "found nothing" not in raised.value.detail
+    assert "parameter" not in raised.value.detail
+    await adapter.close()
