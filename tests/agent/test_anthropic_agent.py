@@ -7,6 +7,9 @@ import pytest
 from pydantic import SecretStr
 
 from venaroq.adapters.ai.anthropic import AnthropicReviewAdapter
+from venaroq.adapters.ai.anthropic.adapter import (
+    _AGENT_TOOLS,  # pyright: ignore[reportPrivateUsage]
+)
 from venaroq.config.anthropic import AnthropicSettings
 from venaroq.config.review import ReviewSettings
 from venaroq.domain.agent import AgentToolResult
@@ -212,3 +215,23 @@ async def test_append_tool_results_builds_tool_result_message() -> None:
     }
     assert blocks[1]["is_error"] is True
     await adapter.close()
+
+
+def _strict_compatible(schema: dict[str, Any], where: str) -> None:
+    if schema.get("type") == "object":
+        assert schema.get("additionalProperties") is False, where
+        assert set(schema.get("required", [])) == set(schema.get("properties", {})), where
+        for name, child in schema.get("properties", {}).items():
+            _strict_compatible(child, f"{where}.{name}")
+    if schema.get("type") == "array":
+        _strict_compatible(schema["items"], f"{where}[]")
+    for unsupported in ("minLength", "maxLength", "minimum", "maximum", "multipleOf"):
+        assert unsupported not in schema, f"{where}: {unsupported} is not allowed in strict mode"
+
+
+def test_agent_tools_are_strict_with_compatible_schemas() -> None:
+    # Strict tool use is what guarantees schema-valid submit_review input (live evals showed
+    # ~4.5% malformed agent turns without it).
+    for tool in _AGENT_TOOLS:
+        assert tool["strict"] is True, tool["name"]
+        _strict_compatible(tool["input_schema"], tool["name"])
